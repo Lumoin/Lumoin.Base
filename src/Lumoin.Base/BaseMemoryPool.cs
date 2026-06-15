@@ -59,8 +59,8 @@ public delegate int SlabCapacityStrategy(int segmentSize);
 /// a long-lived secret asks for <see cref="AllocationKind.Pinned"/> or <see cref="AllocationKind.Native"/>.
 /// The managed and pinned tiers are pure managed and live here; the native tier is supplied by an
 /// injected <see cref="NativeBackingAllocator"/> from a non-browser assembly. When none is wired, an
-/// <see cref="AllocationKind.Native"/> request degrades to <see cref="AllocationKind.Pinned"/>. Native
-/// rentals are allocated per rent (they are not slab-pooled).
+/// <see cref="AllocationKind.Native"/> request throws unless the pool was constructed to allow degradation
+/// to <see cref="AllocationKind.Pinned"/>. Native rentals are allocated per rent (they are not slab-pooled).
 /// </para>
 /// </remarks>
 [DebuggerDisplay("BaseMemoryPool: Slabs={totalSlabs}, Active={activeRentals}, Allocated={totalMemoryAllocated} bytes")]
@@ -85,7 +85,7 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
 
     /// <summary>
     /// The native (locked) backing, supplied by a non-browser assembly. When <see langword="null"/>,
-    /// native requests degrade to pinned.
+    /// native requests throw unless <see cref="AllowNativeDegradation"/> is set.
     /// </summary>
     private NativeBackingAllocator? NativeBacking { get; }
 
@@ -126,6 +126,16 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
     public bool TracingEnabled { get; }
 
     /// <summary>
+    /// Controls what happens when an <see cref="AllocationKind.Native"/> request arrives and no
+    /// <see cref="NativeBackingAllocator"/> is wired. When <see langword="false"/> (the default) the request
+    /// throws, so a pool that must hold secrets in native locked memory fails loud on misconfiguration rather
+    /// than silently handing back weaker memory. When <see langword="true"/> the request degrades instead to
+    /// <see cref="AllocationKind.Pinned"/> — the explicit portable-floor opt-in, the strongest tier a
+    /// browser-clean leaf offers without a P/Invoke dependency.
+    /// </summary>
+    public bool AllowNativeDegradation { get; }
+
+    /// <summary>
     /// Thread-safe counter for the total number of slabs created.
     /// </summary>
     private int totalSlabs;
@@ -144,11 +154,6 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
     /// Thread-safe counter for the total number of segments across all slabs.
     /// </summary>
     private int totalSegments;
-
-    /// <summary>
-    /// Default initial capacity for new slabs when no allocation strategy is specified.
-    /// </summary>
-    public const int DefaultInitialSlabCapacity = 4;
 
 
     /// <summary>
@@ -186,8 +191,9 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
     /// <remarks>
     /// Unlike the base <see cref="MemoryPool{T}.Shared"/>, this returns a lazily-initialized
     /// singleton so that callers who expect shared-state semantics get correct behavior.
-    /// The shared instance uses the default capacity strategy, has tracing enabled, and has no native
-    /// backing wired (so <see cref="AllocationKind.Native"/> degrades to <see cref="AllocationKind.Pinned"/>).
+    /// The shared instance uses the default capacity strategy, has tracing enabled, has no native backing
+    /// wired, and is strict (so <see cref="AllocationKind.Native"/> throws — <see cref="Shared"/> is the
+    /// general pool, not a secure key pool).
     /// </remarks>
     public static new BaseMemoryPool Shared => SharedInstance.Value;
 
@@ -197,10 +203,17 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
     /// </summary>
     /// <param name="nativeBacking">
     /// Optional native (locked) backing, supplied by a non-browser assembly. When <see langword="null"/>,
-    /// <see cref="AllocationKind.Native"/> requests degrade to <see cref="AllocationKind.Pinned"/>.
+    /// an <see cref="AllocationKind.Native"/> request throws unless <paramref name="allowNativeDegradation"/>
+    /// is <see langword="true"/>.
     /// </param>
-    public BaseMemoryPool(NativeBackingAllocator? nativeBacking = null)
-        : this(new Meter(BaseMemoryPoolMetrics.MeterName, "1.0.0"), nativeBacking: nativeBacking)
+    /// <param name="allowNativeDegradation">
+    /// When <see langword="false"/> (the default), an <see cref="AllocationKind.Native"/> request with no
+    /// <paramref name="nativeBacking"/> wired throws, so the pool fails loud on misconfiguration rather than
+    /// silently handing back weaker memory. When <see langword="true"/>, such a request degrades to
+    /// <see cref="AllocationKind.Pinned"/> — the explicit portable-floor opt-in. See <see cref="AllowNativeDegradation"/>.
+    /// </param>
+    public BaseMemoryPool(NativeBackingAllocator? nativeBacking = null, bool allowNativeDegradation = false)
+        : this(new Meter(BaseMemoryPoolMetrics.MeterName, "1.0.0"), nativeBacking: nativeBacking, allowNativeDegradation: allowNativeDegradation)
     {
     }
 
@@ -219,14 +232,22 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
     /// </param>
     /// <param name="nativeBacking">
     /// Optional native (locked) backing, supplied by a non-browser assembly. When <see langword="null"/>,
-    /// <see cref="AllocationKind.Native"/> requests degrade to <see cref="AllocationKind.Pinned"/>.
+    /// an <see cref="AllocationKind.Native"/> request throws unless <paramref name="allowNativeDegradation"/>
+    /// is <see langword="true"/>.
+    /// </param>
+    /// <param name="allowNativeDegradation">
+    /// When <see langword="false"/> (the default), an <see cref="AllocationKind.Native"/> request with no
+    /// <paramref name="nativeBacking"/> wired throws, so the pool fails loud on misconfiguration rather than
+    /// silently handing back weaker memory. When <see langword="true"/>, such a request degrades to
+    /// <see cref="AllocationKind.Pinned"/> — the explicit portable-floor opt-in. See <see cref="AllowNativeDegradation"/>.
     /// </param>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="meter"/> is null.</exception>
     public BaseMemoryPool(
         Meter meter,
         SlabCapacityStrategy? capacityStrategy = null,
         bool tracingEnabled = true,
-        NativeBackingAllocator? nativeBacking = null)
+        NativeBackingAllocator? nativeBacking = null,
+        bool allowNativeDegradation = false)
     {
         ArgumentNullException.ThrowIfNull(meter);
 
@@ -234,6 +255,7 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         CapacityStrategy = capacityStrategy ?? DefaultCapacityStrategy;
         TracingEnabled = tracingEnabled;
         NativeBacking = nativeBacking;
+        AllowNativeDegradation = allowNativeDegradation;
         IsDisposed = false;
 
         //Initialize observable counters for automatic metric collection.
@@ -324,8 +346,9 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
     /// <see cref="AllocationKind.Managed"/> is backed by an ordinary managed array,
     /// <see cref="AllocationKind.Pinned"/> by a pinned-object-heap array
     /// (<c>GC.AllocateArray(pinned: true)</c>), and <see cref="AllocationKind.Native"/> by the injected
-    /// <see cref="NativeBackingAllocator"/> (allocated per rent, not slab-pooled), degrading to
-    /// <see cref="AllocationKind.Pinned"/> when no backing is wired.
+    /// <see cref="NativeBackingAllocator"/> (allocated per rent, not slab-pooled). With no backing wired a
+    /// native request throws unless <see cref="AllowNativeDegradation"/> is set, in which case it degrades to
+    /// <see cref="AllocationKind.Pinned"/>.
     /// </para>
     /// <para>
     /// A single tracing activity spans the full rental lifecycle from rent to return.
@@ -344,12 +367,22 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         }
 
         //Native is the only kind that lives outside this assembly. When a backing is wired it allocates
-        //per rent; when not, it degrades to Pinned — the strongest protection this browser-clean leaf
-        //offers without a P/Invoke dependency.
+        //per rent; when not, the request either degrades to Pinned — the strongest protection this
+        //browser-clean leaf offers without a P/Invoke dependency — or fails loud, depending on
+        //AllowNativeDegradation. The decision is made (and any throw raised) before the tracing activity is
+        //started, so a disallowed-degradation request never leaves a dangling activity behind.
         AllocationKind effectiveKind = kind;
-        if(effectiveKind == AllocationKind.Native && NativeBacking is null)
+        bool degradedFromNative = false;
+        if(kind == AllocationKind.Native && NativeBacking is null)
         {
+            if(!AllowNativeDegradation)
+            {
+                throw new InvalidOperationException(
+                    "Native requested but no NativeBackingAllocator is wired and this pool disallows degradation; wire a backing or construct with allowNativeDegradation:true to fall back to Pinned");
+            }
+
             effectiveKind = AllocationKind.Pinned;
+            degradedFromNative = true;
         }
 
         //Single activity spans the entire rental lifecycle from rent to return.
@@ -365,7 +398,17 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
 
         activity?.AddTag("bufferSize", bufferSize.ToString(CultureInfo.InvariantCulture));
         activity?.AddTag("poolType", nameof(Byte));
-        activity?.AddTag("allocationKind", kind.ToString());
+        activity?.AddTag("allocationKind", effectiveKind.ToString());
+
+        if(degradedFromNative)
+        {
+            activity?.AddTag("requestedAllocationKind", AllocationKind.Native.ToString());
+            activity?.AddEvent(new ActivityEvent("AllocationKindDegraded", tags: new ActivityTagsCollection
+            {
+                { "requested", "Native" },
+                { "effective", "Pinned" }
+            }));
+        }
 
         BufferSizeHistogram.Record(bufferSize);
 
@@ -626,11 +669,24 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
                     "Segment count must be greater than zero.");
             }
 
+            //The backing length is computed in 64-bit and bound-checked before the array is allocated, so a
+            //large segment size times the slab capacity cannot silently overflow the int multiply into a
+            //too-small (or negative) array that a later segment slice would then read past. Past the check the
+            //product fits an int, which in turn makes every downstream index * SegmentSize slice provably
+            //in-range (index < SegmentCount), so they need no further widening.
+            long backingLength = (long)segmentSize * segmentCount;
+            if(backingLength > Array.MaxLength)
+            {
+                throw new ArgumentOutOfRangeException(nameof(segmentCount),
+                    $"A slab of {segmentCount} segments of {segmentSize} bytes each needs {backingLength} bytes, above the maximum array length of {Array.MaxLength}.");
+            }
+
             SegmentSize = segmentSize;
             SegmentCount = segmentCount;
+            int backingSize = (int)backingLength;
             Buffer = pinned
-                ? GC.AllocateArray<byte>(segmentSize * segmentCount, pinned: true)
-                : new byte[segmentSize * segmentCount];
+                ? GC.AllocateArray<byte>(backingSize, pinned: true)
+                : new byte[backingSize];
             RentedSegments = new BitArray(segmentCount, false);
 
             AvailableSegments = new Stack<int>(segmentCount);
