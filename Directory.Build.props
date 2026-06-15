@@ -1,0 +1,140 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RestoreUseStaticGraphEvaluation>true</RestoreUseStaticGraphEvaluation>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+    <NugetAuditMode>all</NugetAuditMode>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <GenerateSBOM>true</GenerateSBOM>
+    <!-- This should be the published baseline version to validate against. First release, no baseline yet.
+    <PackageValidationBaselineVersion>0.0.1</PackageValidationBaselineVersion>
+    -->
+
+    <!--
+      Lumoin.Base is bedrock: it MUST stay AOT / trim / browser-clean so EVERY family member,
+      including browser/WASM builds, can consume it. Any platform-specific memory backing (native
+      allocation + mlock/VirtualLock) lives in a SEPARATE non-browser assembly and is INJECTED via
+      the NativeBackingAllocator seam — never compiled into this leaf (that P/Invoke would trip
+      CA1416 against the browser target).
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <ILLinkTreatWarningsAsErrors>true</ILLinkTreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup Condition="!$(MSBuildProjectName.EndsWith('.Tests'))">
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <!-- Settings for all tests projects specifically. -->
+  <PropertyGroup>
+    <EnableMSTestRunner>true</EnableMSTestRunner>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--
+      CA1000: Static members on generic types. Standard C# practice, no usability issue.
+      CA1002: Don't expose List<T>. Library types are sealed; List<T> ergonomics preferred.
+      CA1031: Catch general exception. Used in debugger display code where any failure must be swallowed.
+      CA1711: Names ending in 'Delegate'. Applied to actual delegate declarations where the suffix is correct.
+      CA1716: Identifier contains type name. The library name, namespace and typename are as designed.
+      CA1720: Identifier contains type name. The library name, namespace and typename are as designed.
+      CA1724: Type names should be unique. The library name, namespace and typename are as designed.
+      CA1819: Properties returning arrays. Low-level types may expose raw byte arrays by design.
+      CA2225: Named alternatives for operators. Only consumed from C# and F#, both support operators natively.
+      CA2227: Read-only collection properties. POCOs require settable properties for deserialization.
+    -->
+    <NoWarn>$(NoWarn);CA1000;CA1002;CA1031;CA1711;CA1716;CA1720;CA1724;CA1819;CA2225;CA2227</NoWarn>
+  </PropertyGroup>
+
+  <!-- Common nuget package parameters and resources. -->
+  <PropertyGroup>
+    <PackageId>$(AssemblyName)</PackageId>
+    <Authors>Lumoin and contributors</Authors>
+    <Product>Lumoin.Base</Product>
+    <!-- A real default description (projects override with a specific one); without it NuGet
+         stamps the placeholder "Package Description" into the nuspec. -->
+    <Description>$(MSBuildProjectName) is part of Lumoin.Base, the dependency-free bedrock primitives shared across the Lumoin family of .NET libraries.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <Copyright>Lumoin</Copyright>
+    <PackageIcon>resources/lumoin-base-nuget-logo.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/Lumoin/Lumoin.Base</PackageProjectUrl>
+    <Company>Lumoin</Company>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <RepositoryUrl>https://github.com/Lumoin/Lumoin.Base</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!-- These are set by the continuous integration build (see main.yml). -->
+    <PackageVersion>0.0.0</PackageVersion>
+    <AssemblyVersion>0.0.0</AssemblyVersion>
+    <FileVersion>0.0.0</FileVersion>
+    <Version>0.0.0</Version>
+    <AssemblyInformationalVersion>0.0.0</AssemblyInformationalVersion>
+    <NeutralLanguage>en-US</NeutralLanguage>
+
+    <AppendToReleaseNotesProperty>
+      <![CDATA[
+See full changelog at https://github.com/Lumoin/Lumoin.Base/blob/main/CHANGELOG.md.]]>
+    </AppendToReleaseNotesProperty>
+    <ChangelogFile>../../CHANGELOG.md</ChangelogFile>
+
+
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>All</AnalysisMode>
+
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SIL.ReleaseTasks" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- Pack the NuGet logo and the repository readme into packable (non-test) projects. -->
+  <ItemGroup Condition="!$(MSBuildProjectName.EndsWith('Tests'))">
+    <None Include="$(MSBuildThisFileDirectory)resources/lumoin-base-nuget-logo.png">
+      <Pack>True</Pack>
+      <PackagePath>/resources</PackagePath>
+    </None>
+    <None Include="$(MSBuildThisFileDirectory)README.md">
+      <Pack>True</Pack>
+      <PackagePath>/</PackagePath>
+    </None>
+  </ItemGroup>
+
+  <!-- SBOM for all projects. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Sbom.Targets" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Lumoin.Base.Tests" />
+  </ItemGroup>
+
+  <!-- Banned-API analyzer wiring. Every project picks up the analyzer and the general banlist
+       (DateTime.Now et al.), enforced universally. The serialization banlist (System.Text.Json,
+       System.Formats.Cbor) is enforced by default; a project that implements serialization sets
+       <EnableSerializationBan>false</EnableSerializationBan> in its PropertyGroup to opt out. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.txt" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(EnableSerializationBan)' != 'false'">
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.Serialization.txt" />
+  </ItemGroup>
+
+</Project>

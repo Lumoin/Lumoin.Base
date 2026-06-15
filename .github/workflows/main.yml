@@ -1,0 +1,279 @@
+name: Lumoin.Base .NET build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    paths-ignore:
+      - "**.md"
+  release:
+    types:
+      - published
+
+  schedule:
+    # A daily build to check all is still functioning.
+    - cron: "0 0 * * *"
+
+env:
+  DOTNET_ENVIRONMENT: CI
+  BUILD_CONFIGURATION: Release
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_NOLOGO: true
+  NUGET_XMLDOC_MODE: skip
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+  NUGET_FEED: https://api.nuget.org/v3/index.json
+  GITHUB_USER: ${{ github.repository_owner }}
+  GITHUB_FEED: https://nuget.pkg.github.com/lumoin/
+
+  # The shippable library NuGet package, packed and uploaded in the canonical pack
+  # step below. It carries a NuGet <Description> and packs by default. As the project
+  # grows, add further project names here.
+  LIBRARY_PROJECTS: >
+    Lumoin.Base
+
+  # Single test project — its compiled executable is the input to dotnet-coverage.
+  BASE_TESTS: Lumoin.Base.Tests
+
+  # Endpoints harden-runner is permitted to reach: NuGet feed access, dotnet tool
+  # downloads, .NET SDK installation, Sigstore attestation, certificate revocation,
+  # and the standard api.github.com surface. Add to this list when adding actions
+  # or external dependencies.
+  COMMON_ALLOWED_ENDPOINTS: >
+    aka.ms:443
+    api.github.com:443
+    *.actions.githubusercontent.com:443
+    api.nuget.org:443
+    www.nuget.org:443
+    builds.dotnet.microsoft.com:443
+    ci.dot.net:443
+    pkgs.dev.azure.com:443
+    github.com:443
+    nuget.pkg.github.com:443
+    fulcio.sigstore.dev:443
+    rekor.sigstore.dev:443
+    cacerts.digicert.com:80
+    ts-crl.ws.symantec.com:80
+    crl3.digicert.com:80
+    crl4.digicert.com:80
+    s.symcb.com:80
+    ocsp.digicert.com:80
+    www.microsoft.com:80
+
+jobs:
+  build:
+    name: Build Lumoin.Base packages
+    permissions:
+      # Most legs need only contents:read. The ubuntu-latest leg additionally writes
+      # checks/pull-request comments (test summary) and produces signed artifact
+      # attestations via Sigstore (id-token, attestations). GitHub does not support
+      # per-matrix-leg permissions, so all legs carry the elevated set — the
+      # `if: matrix.os == 'ubuntu-latest'` step guards keep the elevated capabilities
+      # from being exercised on the other runners.
+      checks: write
+      pull-requests: write
+      id-token: write
+      attestations: write
+      contents: read
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+          - ubuntu-24.04-arm
+
+    steps:
+    - name: Harden Runner
+      if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' }}
+      uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176
+      with:
+        disable-sudo: true
+        egress-policy: block
+        allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
+
+    - name: Checkout code
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        fetch-depth: 0
+        fetch-tags: true
+
+    - name: Set up .NET SDK
+      uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7
+      with:
+        cache: true
+        cache-dependency-path: '**/packages.lock.json'
+        global-json-file: global.json
+
+    - name: Install dependencies
+      run: dotnet restore --locked-mode
+
+    # Local tools (the .config/dotnet-tools.json manifest) restore into the global NuGet
+    # package cache, which setup-dotnet already caches via packages.lock.json — there is
+    # no ~/.dotnet/tools directory to cache separately (that location is for `-g` tools,
+    # and caching its non-existent path fails the post-job tar on Windows).
+    - name: Restore local .NET tools
+      run: dotnet tool restore
+
+    # Compute the package version once per leg. The rules follow the sibling
+    # repositories' shared convention so consumers comparing them see one
+    # version-numbering style:
+    #   release         -> "<tag>+<sha7>"        (e.g. 1.2.0+ab12cd3)
+    #   develop branch  -> "<tag>-develop.<run>+<sha7>"
+    #   anything else   -> "<tag>-build.<run>+<sha7>"
+    - name: Set NuGet package and suffix version
+      run: |
+        latestTag=$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.1)
+        if [[ $GITHUB_EVENT_NAME == 'release' ]]; then
+          arrTag=(${GITHUB_REF//\// })
+          VERSION="${arrTag[2]}"
+          VERSION="${VERSION//v}"
+          echo "PACKAGE_VERSION=${VERSION}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "TAG_VERSION=${VERSION}" >> "$GITHUB_ENV"
+        elif [[ $GITHUB_REF == 'refs/heads/develop' ]]; then
+          echo "PACKAGE_VERSION=${latestTag//v}-develop.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "VERSION=${latestTag//v}-develop.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "TAG_VERSION=${latestTag//v}" >> "$GITHUB_ENV"
+        else
+          echo "PACKAGE_VERSION=${latestTag//v}-build.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "VERSION=${latestTag//v}-build.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "TAG_VERSION=${latestTag//v}" >> "$GITHUB_ENV"
+        fi
+      shell: bash
+
+    # ContinuousIntegrationBuild flips SourceLink and deterministic-build behaviour on.
+    - name: Build
+      run: dotnet build Lumoin.Base.slnx --tl --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore --property:ContinuousIntegrationBuild=true --property:Version=${{ env.VERSION }} --property:InformationalVersion=${{ env.PACKAGE_VERSION }} --property:AssemblyVersion=${{ env.TAG_VERSION }} --property:FileVersion=${{ env.TAG_VERSION }}
+      timeout-minutes: 15
+
+    # dotnet-coverage runs the test binary as a child process and records cobertura
+    # coverage + a TRX report. The test executable has no extension on Linux/macOS,
+    # so the same command works everywhere — the host shell finds the binary by name.
+    - name: Test
+      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.BASE_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.BASE_TESTS }}' --report-trx --report-trx-filename testresults.trx --results-directory '${{ github.workspace }}/reports'
+      timeout-minutes: 20
+
+    - name: Create test summary
+      if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' }}
+      uses: EnricoMi/publish-unit-test-result-action@c950f6fb443cb5af20a377fd0dfaa78838901040
+      with:
+        trx_files: '${{ github.workspace }}/reports/**/*.trx'
+
+    # Pack runs on ubuntu-latest only. The other legs prove the code builds and tests
+    # pass on x64 Windows, macOS, and ARM64 Linux — packing is canonical, one package
+    # per release rather than one per matrix leg.
+    - name: Pack library NuGet packages
+      if: ${{ matrix.os == 'ubuntu-latest' && github.repository_owner == 'lumoin' }}
+      run: |
+        for project in $LIBRARY_PROJECTS; do
+          path="src/$project/$project.csproj"
+          echo "Packing $path"
+          dotnet pack --verbosity normal \
+            --configuration "$BUILD_CONFIGURATION" \
+            --no-build \
+            --output nupkgs \
+            --property:PackageVersion="${PACKAGE_VERSION%%+*}" \
+            "$path"
+        done
+
+    # Sigstore artifact attestation needs the public-good Fulcio/Rekor transparency
+    # log, unavailable while the repository is private — the step errors with the
+    # current plan. Gated on repository visibility so it is skipped while private and
+    # turns on automatically once the repository is made public; no edit needed then.
+    - name: Generate artifact attestation
+      if: ${{ matrix.os == 'ubuntu-latest' && github.repository_owner == 'lumoin' && github.actor != 'dependabot[bot]' && github.event.repository.private == false }}
+      uses: lumoin/trusted-devsecops/.github/actions/sign-artifact@bd2b7f91e73d758f3126562d6a569fc0f31814ee
+      with:
+        subject-path: './nupkgs/*.nupkg'
+
+    - name: Upload library NuGet packages
+      if: ${{ matrix.os == 'ubuntu-latest' && github.repository_owner == 'lumoin' && github.actor != 'dependabot[bot]' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: nupkg-libraries
+        path: ./nupkgs/*.*
+
+  # Pre-release goes to GitHub Packages on the develop branch. The release deploy goes
+  # to NuGet.org on tagged GitHub releases via NuGet trusted publishing (OIDC) — no
+  # API key needed beyond a registered nuget.org profile.
+  prerelease:
+    name: Create and upload Lumoin.Base pre-release packages to GitHub
+    permissions:
+      packages: write
+    needs: [ build ]
+    if: ${{ github.ref == 'refs/heads/develop' && github.repository_owner == 'lumoin' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176
+        with:
+          disable-sudo: true
+          egress-policy: block
+          allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
+
+      - name: Download NuGet packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: nupkg-*
+          merge-multiple: true
+          path: ./nupkgs
+
+      - name: Push packages to GitHub feed
+        run: |
+          for file in ./nupkgs/*.nupkg; do
+            dotnet nuget push "$file" --source "$GITHUB_FEED" --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
+          done
+
+  deploy:
+    name: Create and upload Lumoin.Base release packages to NuGet.org
+    permissions:
+      packages: write
+      # id-token is required for NuGet trusted publishing (OIDC).
+      id-token: write
+    needs: [ build ]
+    if: ${{ github.event_name == 'release' && github.repository_owner == 'lumoin' }}
+    runs-on: ubuntu-latest
+    # Bind publishing to the "Release" deployment environment so the OIDC token carries the
+    # environment claim and deployments are recorded against it.
+    environment: Release
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176
+        with:
+          disable-sudo: true
+          egress-policy: block
+          allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
+
+      - name: Download NuGet packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: nupkg-*
+          merge-multiple: true
+          path: ./nupkgs
+
+      - name: Push packages to GitHub feed
+        run: |
+          for file in ./nupkgs/*.nupkg; do
+            dotnet nuget push "$file" --source "$GITHUB_FEED" --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
+          done
+
+      # NuGet trusted publishing: exchange the GitHub OIDC token for a short-lived API
+      # key. Requires the repository to be registered as a trusted publisher in the
+      # nuget.org profile owner's account (see secrets.NUGET_USER).
+      - name: NuGet trusted publishing login (OIDC)
+        id: nuget_login
+        uses: NuGet/login@d22cc5f58ff5b88bf9bd452535b4335137e24544
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push packages to NuGet.org
+        run: |
+          for file in ./nupkgs/*.nupkg; do
+            dotnet nuget push "$file" --source "$NUGET_FEED" --api-key "${{ steps.nuget_login.outputs.NUGET_API_KEY }}" --skip-duplicate
+          done

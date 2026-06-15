@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- The library source relies on the implicit global using set (System, System.Collections.Generic,
+         System.Threading, ...); the non-implicit namespaces (System.Buffers, System.Diagnostics.Metrics, ...)
+         are imported explicitly per file. -->
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Description>Bedrock primitives shared across the Lumoin family: the sensitivity-aware BaseMemoryPool, the Tag metadata container, and the secure-memory substrate. Dependency-free and AOT / trim / browser-clean — platform-specific memory backings are injected, not referenced.</Description>
+    <PackageTags>memory;pool;sensitive;secure-memory;bedrock;lumoin</PackageTags>
+  </PropertyGroup>
+
+</Project>
