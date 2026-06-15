@@ -268,6 +268,22 @@ public sealed class BaseMemoryPoolTests
 
 
     [TestMethod]
+    public void RentRejectsASlabWhoseBackingWouldOverflowAnArray()
+    {
+        //A buffer size whose product with the slab capacity exceeds the maximum array length is rejected
+        //before any allocation: the 64-bit bound check fails fast, so the int multiply can never wrap into a
+        //too-small backing that a later segment slice would read past. The capacity strategy returns two, so
+        //a near-int.MaxValue buffer size makes the product overflow an int while staying allocation-free.
+        using var meter = new Meter("Test", "1.0.0");
+        using var pool = new BaseMemoryPool(
+            meter,
+            capacityStrategy: _ => 2);
+
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => pool.Rent(int.MaxValue));
+    }
+
+
+    [TestMethod]
     public void RentThrowsWhenPoolDisposed()
     {
         var pool = new BaseMemoryPool();
@@ -449,7 +465,7 @@ public sealed class BaseMemoryPoolTests
     [TestMethod]
     public void NativeRequestDegradesToPinnedWhenNoBackingWired()
     {
-        using var pool = new BaseMemoryPool();
+        using var pool = new BaseMemoryPool(allowNativeDegradation: true);
         using var owner = pool.Rent(32, AllocationKind.Native);
 
         Assert.AreEqual(32, owner.Memory.Length);
@@ -491,6 +507,80 @@ public sealed class BaseMemoryPoolTests
 
         Assert.AreEqual<byte>(0x11, a.Memory.Span[0], "Native buffers must not alias.");
         Assert.AreEqual<byte>(0x22, b.Memory.Span[0], "Native buffers must not alias.");
+    }
+
+
+    [TestMethod]
+    public void NativeRequestThrowsWhenDegradationDisallowedAndNoBackingWired()
+    {
+        //No backing wired and degradation disallowed: the Native request must fail loud rather than
+        //silently hand back weaker (Pinned) memory.
+        using var pool = new BaseMemoryPool(allowNativeDegradation: false);
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => pool.Rent(32, AllocationKind.Native));
+    }
+
+
+    [TestMethod]
+    public void WiredNativeBackingServesNativeEvenWhenDegradationDisallowed()
+    {
+        //Disallowing degradation only governs the no-backing case; a wired backing still serves Native.
+        var callCount = new StrongBox<int>(0);
+
+        using var pool = new BaseMemoryPool(CountingBacking(callCount), allowNativeDegradation: false);
+        using var owner = pool.Rent(48, AllocationKind.Native);
+
+        Assert.AreEqual(48, owner.Memory.Length);
+        Assert.AreEqual(1, callCount.Value, "A wired native backing must serve Native even when degradation is disallowed.");
+    }
+
+
+    [TestMethod]
+    [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Analyzer false positive on testRoot.")]
+    public void DegradedNativeRentReportsEffectiveKindAndEmitsEvent()
+    {
+        //A default (degrading) pool with no backing wired must record the EFFECTIVE kind (Pinned) on the
+        //Rent activity, flag the requested kind (Native), and emit the degradation event — so an operator
+        //sees the truth, not the false "Native" assurance.
+        Activity.Current = null;
+
+        using var testRoot = new Activity(nameof(DegradedNativeRentReportsEffectiveKindAndEmitsEvent));
+        testRoot.Start();
+        var testTraceId = testRoot.TraceId;
+
+        var activities = new List<Activity>();
+
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BaseMemoryPool",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = activity =>
+            {
+                if(activity.TraceId == testTraceId)
+                {
+                    activities.Add(activity);
+                }
+            }
+        };
+
+        ActivitySource.AddActivityListener(activityListener);
+
+        using var pool = new BaseMemoryPool(allowNativeDegradation: true);
+
+        using(pool.Rent(32, AllocationKind.Native)) { }
+
+        testRoot.Stop();
+
+        var rentActivity = activities.FirstOrDefault(a => a.OperationName == "Rent");
+        Assert.IsNotNull(rentActivity, "Should have captured the Rent lifecycle activity.");
+
+        Assert.AreEqual("Pinned", rentActivity.GetTagItem("allocationKind")?.ToString(),
+            "Telemetry must record the effective kind (Pinned), not the requested Native.");
+        Assert.AreEqual("Native", rentActivity.GetTagItem("requestedAllocationKind")?.ToString(),
+            "Telemetry must preserve the originally requested kind (Native).");
+
+        bool hasDegradedEvent = rentActivity.Events.Any(e => e.Name == "AllocationKindDegraded");
+        Assert.IsTrue(hasDegradedEvent, "A degraded Native rent must emit an AllocationKindDegraded event.");
     }
 
 
