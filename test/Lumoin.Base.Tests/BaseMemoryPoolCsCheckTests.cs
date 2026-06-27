@@ -230,8 +230,10 @@ public sealed class BaseMemoryPoolCsCheckTests
     }
 
 
-    //A stand-in native owner: a managed array that clears on dispose, enough to exercise the native
-    //backing seam under property generation.
+    /// <summary>
+    /// A stand-in native owner: a managed array that clears on dispose, enough to exercise the native
+    /// backing seam under property generation.
+    /// </summary>
     private sealed class ArrayOwner(int size): IMemoryOwner<byte>
     {
         private readonly byte[] buffer = new byte[size];
