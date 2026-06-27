@@ -23,8 +23,11 @@
 
     <!-- CA1515: types can be made internal. MSTest discovers public [TestClass] types by convention, and
          MSTest.Sdk suppresses this rule for test projects by default; this project uses the plain SDK with
-         explicit package references, so it suppresses the same test-only rule here. -->
-    <NoWarn>$(NoWarn);CA1515</NoWarn>
+         explicit package references, so it suppresses the same test-only rule here.
+         CA2000: ownership-transfer false positive. Tests of SensitiveMemory/SlabBufferWriter intentionally
+         hand an IMemoryOwner/IDisposable to the wrapper under test, which owns and disposes it; CA2000 cannot
+         see the transitive disposal. Test-only, like the trim/AOT analyzers disabled above. -->
+    <NoWarn>$(NoWarn);CA1515;CA2000</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

@@ -18,8 +18,10 @@ public sealed class BaseMemoryPoolTests
     public TestContext TestContext { get; set; } = null!;
 
 
-    //A stand-in for a real native owner: a managed array, enough to prove the native backing seam is
-    //invoked and that the returned memory is exactly the requested size and usable.
+    /// <summary>
+    /// A stand-in for a real native owner: a managed array, enough to prove the native backing seam is
+    /// invoked and that the returned memory is exactly the requested size and usable.
+    /// </summary>
     private sealed class ArrayBackedNativeOwner(int size): IMemoryOwner<byte>
     {
         private readonly byte[] buffer = new byte[size];
@@ -30,7 +32,7 @@ public sealed class BaseMemoryPoolTests
     }
 
 
-    //An allocator that serves Native requests from managed arrays and counts how often it is called.
+    /// <summary>An allocator that serves Native requests from managed arrays and counts how often it is called.</summary>
     private static NativeBackingAllocator CountingBacking(StrongBox<int> callCount)
     {
         return size =>
@@ -42,8 +44,10 @@ public sealed class BaseMemoryPoolTests
     }
 
 
-    //Builds a pool whose Native tier is actually wired, so the AllocationKind.Native data rows exercise
-    //the injected backing path rather than degrading to Pinned.
+    /// <summary>
+    /// Builds a pool whose Native tier is actually wired, so the AllocationKind.Native data rows exercise
+    /// the injected backing path rather than degrading to Pinned.
+    /// </summary>
     private static BaseMemoryPool NewWiredPool()
     {
         return new BaseMemoryPool(CountingBacking(new StrongBox<int>(0)));

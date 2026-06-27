@@ -91,20 +91,20 @@ jobs:
     steps:
     - name: Harden Runner
       if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' }}
-      uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176
+      uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
       with:
         disable-sudo: true
         egress-policy: block
         allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
 
     - name: Checkout code
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       with:
         fetch-depth: 0
         fetch-tags: true
 
     - name: Set up .NET SDK
-      uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7
+      uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
       with:
         cache: true
         cache-dependency-path: '**/packages.lock.json'
@@ -161,7 +161,7 @@ jobs:
 
     - name: Create test summary
       if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' }}
-      uses: EnricoMi/publish-unit-test-result-action@c950f6fb443cb5af20a377fd0dfaa78838901040
+      uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3
       with:
         trx_files: '${{ github.workspace }}/reports/**/*.trx'
 
@@ -211,7 +211,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
         with:
           disable-sudo: true
           egress-policy: block
@@ -244,7 +244,7 @@ jobs:
     environment: Release
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
         with:
           disable-sudo: true
           egress-policy: block
@@ -268,7 +268,7 @@ jobs:
       # nuget.org profile owner's account (see secrets.NUGET_USER).
       - name: NuGet trusted publishing login (OIDC)
         id: nuget_login
-        uses: NuGet/login@d22cc5f58ff5b88bf9bd452535b4335137e24544
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841
         with:
           user: ${{ secrets.NUGET_USER }}
 
