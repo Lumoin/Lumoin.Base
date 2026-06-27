@@ -289,6 +289,81 @@ public sealed class Utf8StringPoolTests
     }
 
 
+    [TestMethod]
+    public void ResetReclaimsAndAllowsReuse()
+    {
+        using Utf8StringPool pool = new();
+
+        pool.Intern("first"u8);
+        pool.Intern("second"u8);
+        Assert.AreEqual(2, pool.Count);
+
+        pool.Reset();
+
+        Assert.AreEqual(0, pool.Count);
+        Assert.AreEqual(0, pool.TotalBytesInterned);
+
+        Utf8String reused = pool.Intern("third"u8);
+        Assert.AreEqual("third", reused.ToString());
+        Assert.AreEqual(1, pool.Count);
+    }
+
+
+    [TestMethod]
+    public void ResetPreservesConfiguration()
+    {
+        using Utf8StringPool pool = new(validateOnIntern: false);
+
+        pool.Reset();
+
+        //Validation-off configuration must survive the reset.
+        Utf8String interned = pool.Intern([0xC3, 0x28]);
+        Assert.AreEqual(2, interned.Length);
+    }
+
+
+    [TestMethod]
+    public void ResetCanBeCalledRepeatedly()
+    {
+        using Utf8StringPool pool = new();
+        pool.Intern("x"u8);
+
+        pool.Reset();
+        pool.Reset();
+
+        Assert.AreEqual(0, pool.Count);
+        Assert.AreEqual("y", pool.Intern("y"u8).ToString());
+    }
+
+
+    [TestMethod]
+    public void ResetAfterDisposeThrows()
+    {
+        Utf8StringPool pool = new();
+        pool.Dispose();
+
+        Assert.ThrowsExactly<ObjectDisposedException>(() => pool.Reset());
+    }
+
+
+    [TestMethod]
+    public void ResetReturnsRentalsToInjectedPoolWithoutDisposingIt()
+    {
+        Utf8StringPool interner = new(BaseMemoryPool.Shared);
+        interner.Intern("term"u8);
+
+        interner.Reset();
+
+        //The injected shared pool must remain usable after the interner resets its slabs.
+        using IMemoryOwner<byte> rental = BaseMemoryPool.Shared.Rent(16);
+        Assert.IsGreaterThanOrEqualTo(16, rental.Memory.Length);
+
+        //And the reset pool itself still works.
+        Assert.AreEqual("after", interner.Intern("after"u8).ToString());
+        interner.Dispose();
+    }
+
+
     /// <summary>
     /// A small, fixed-seed, dependency-free deterministic hash standing in for any cross-process-stable
     /// function a distributed caller would supply.
