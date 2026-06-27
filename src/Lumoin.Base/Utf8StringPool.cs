@@ -344,6 +344,34 @@ public sealed class Utf8StringPool: IDisposable
     }
 
 
+    /// <summary>
+    /// Releases all interned memory and clears the table, returning the pool to its just-constructed state for
+    /// reuse without recreating it. The reclaim is bulk, exactly like <see cref="Dispose"/>: every
+    /// <see cref="Utf8String"/> the pool has returned becomes invalid — its bytes are freed — so call this only at
+    /// a point where no interned value is still in use. The configuration (slab size, allocation kind, comparer,
+    /// validation, the underlying pool) is preserved.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    public void Reset()
+    {
+        ObjectDisposedException.ThrowIf(Disposed, this);
+
+        foreach(IMemoryOwner<byte> owner in Slabs)
+        {
+            owner.Dispose();
+        }
+
+        Slabs.Clear();
+        Table.Clear();
+        TotalBytesInterned = 0;
+
+        CurrentOwner = RentBuffer(SlabSize);
+        CurrentBuffer = CurrentOwner.Memory;
+        Slabs.Add(CurrentOwner);
+        Position = 0;
+    }
+
+
     private static BaseMemoryPool CreateDefaultPool()
     {
         //One segment per slab class so each 64 KB rental is exact (no 4x over-allocation), and tracing
