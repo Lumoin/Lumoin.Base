@@ -22,8 +22,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `BaseMemoryPool`: a `MemoryPool<byte>` that lets the caller choose how a buffer is backed
   through an `AllocationKind` passed at rent time (`Managed`, `Pinned`, `Native`), with exact-size
   slabs, deterministic zero-on-return, and OpenTelemetry metrics. Native backing is injected through
-  the `NativeBackingAllocator` seam and degrades to `Pinned` when unwired, keeping the assembly
-  dependency-free and AOT / trim / browser-clean.
+  the `NativeBackingAllocator` seam, keeping the assembly dependency-free and AOT / trim /
+  browser-clean. A `Native` rent with no backing wired throws by default; the graceful fallback to
+  `Pinned` is an explicit opt-in (`allowNativeDegradation`) and telemetry records the effective
+  allocation kind plus a degradation event.
 - `Tag`: a metadata container for purpose-specific classification of pooled memory.
 - `SlabBufferWriter`: an `IBufferWriter<byte>` over a `MemoryPool<byte>` (e.g. `BaseMemoryPool`) that grows by
   renting linked slabs and `Detach()`-es into a single exact-length owned buffer — the streaming-serialization
@@ -62,6 +64,24 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   by design (it relies on GC liveness, so no `Native`/`Pinned` backing). Optional OpenTelemetry metrics via
   `Utf8StringInternerMetrics` (intern, hit, and rotation counters plus a live-count gauge), and an optional maximum
   value length that returns oversized values uncached so no single value can bloat the resident set.
+- New package `Lumoin.Base.Sodium`: the libsodium implementation of the `NativeBackingAllocator`
+  seam. Wiring `SodiumBacking.Allocate` into a `BaseMemoryPool` serves `AllocationKind.Native`
+  rents as per-rent isolated `sodium_malloc` guarded allocations — canary, guard pages, best-effort
+  memory locking, and zero on free — with `sodium_memzero` defense-in-depth and a finalizer
+  backstop on the owner. The managed binding is RID-agnostic and carries no native assets; the
+  libsodium native library is resolved at runtime (family-built native asset packages to follow),
+  and `SodiumBacking.IsAvailable` reports whether it loaded so hosts wire the backing only where
+  it exists.
+- Protected-slab native tier: `BaseMemoryPool` gains a pool-level `NativeRentMode`
+  (`PerRentIsolated`, the default, or `ProtectedSlab`). In protected-slab mode injected backing
+  regions are allocated on demand per buffer size, each subdivided into exact-size segments
+  bracketed by per-segment software canaries (verified on return; a stomped canary zeroes the
+  secret, retires the segment,
+  records the `Lumoin.BaseMemoryPool.CanaryViolationsTotal` counter and a `CanaryViolation`
+  activity event, and surfaces as the new `CanaryViolationException`). Density in place of
+  per-secret hardware guards: hundreds of transient secrets fit a locked-memory budget that holds
+  only a handful of isolated allocations. Native rent activities now carry a `nativeRentMode` tag,
+  and `TrimExcess` reclaims idle protected regions.
 
 ### Changed
 
@@ -74,3 +94,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   derived equality from its backing dictionary, comparing by reference). The `(Type, object)` tuple factory
   overloads, the `Data` property, and the `Type` indexer are removed in favor of the typed `Create<T>` /
   `With<T>` / `Get<T>` / `TryGet<T>` / `Contains<T>` API and a read-only `Entries` projection. **Breaking.**
+- Segment clearing throughout the pool now uses `CryptographicOperations.ZeroMemory` instead of
+  `Span.Clear`/`Array.Clear`, so the zeroing of returned secrets cannot be elided.
+- `BaseMemoryPool` constructors gained the optional `nativeRentMode` parameter (source-compatible;
+  recompile against this version).

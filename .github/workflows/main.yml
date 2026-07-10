@@ -29,14 +29,17 @@ env:
   GITHUB_USER: ${{ github.repository_owner }}
   GITHUB_FEED: https://nuget.pkg.github.com/lumoin/
 
-  # The shippable library NuGet package, packed and uploaded in the canonical pack
-  # step below. It carries a NuGet <Description> and packs by default. As the project
+  # The shippable library NuGet packages, packed and uploaded in the canonical pack
+  # step below. Each carries a NuGet <Description> and packs by default. As the project
   # grows, add further project names here.
   LIBRARY_PROJECTS: >
     Lumoin.Base
+    Lumoin.Base.Sodium
 
-  # Single test project — its compiled executable is the input to dotnet-coverage.
+  # Test projects — each compiled executable is an input to dotnet-coverage in its
+  # own test step below.
   BASE_TESTS: Lumoin.Base.Tests
+  SODIUM_TESTS: Lumoin.Base.Sodium.Tests
 
   # Endpoints harden-runner is permitted to reach: NuGet feed access, dotnet tool
   # downloads, .NET SDK installation, Sigstore attestation, certificate revocation,
@@ -91,7 +94,7 @@ jobs:
     steps:
     - name: Harden Runner
       if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' }}
-      uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
       with:
         disable-sudo: true
         egress-policy: block
@@ -159,6 +162,14 @@ jobs:
       run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.BASE_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.BASE_TESTS }}' --report-trx --report-trx-filename testresults.trx --results-directory '${{ github.workspace }}/reports'
       timeout-minutes: 20
 
+    # The runners carry no libsodium native library and the family ships its own (no
+    # third-party binaries), so the sodium-dependent tests assert inconclusive (skipped)
+    # here while the availability-independent tests still execute. The fork-built
+    # native asset packages light the skipped tests up when they land.
+    - name: Test (Sodium)
+      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage-sodium.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.SODIUM_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.SODIUM_TESTS }}' --report-trx --report-trx-filename testresults-sodium.trx --results-directory '${{ github.workspace }}/reports'
+      timeout-minutes: 10
+
     - name: Create test summary
       if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' }}
       uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3
@@ -211,7 +222,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
         with:
           disable-sudo: true
           egress-policy: block
@@ -244,7 +255,7 @@ jobs:
     environment: Release
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
         with:
           disable-sudo: true
           egress-policy: block

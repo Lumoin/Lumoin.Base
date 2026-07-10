@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The bindings hand sodium_malloc'd pointers to Span/MemoryManager, which needs unsafe. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Description>The libsodium-backed native memory tier for Lumoin.Base: SodiumBacking implements the NativeBackingAllocator seam so BaseMemoryPool serves AllocationKind.Native rents as per-rent isolated sodium_malloc guarded allocations (canary, guard pages, best-effort memory locking, zero on free). The managed binding is RID-agnostic and carries no native assets; the libsodium native library is resolved at runtime.</Description>
+    <PackageTags>libsodium;sodium;secure-memory;guarded-memory;mlock;memory;pool;lumoin</PackageTags>
+  </PropertyGroup>
+
+  <!-- Directory.Build.props adds SupportedPlatform browser to every non-Tests project so the
+       bedrock leaf stays browser-clean. This assembly is the non-browser side of that split: it
+       P/Invokes into libsodium, which cannot exist in a browser target (and would trip CA1416
+       against it), so the browser platform is removed here as the props file comment requires. -->
+  <ItemGroup>
+    <SupportedPlatform Remove="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Lumoin.Base/Lumoin.Base.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Lumoin.Base.Sodium.Tests" />
+  </ItemGroup>
+
+</Project>

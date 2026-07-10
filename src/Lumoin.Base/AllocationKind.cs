@@ -22,7 +22,9 @@ public enum AllocationKind
 
     /// <summary>
     /// Native, locked, non-swappable memory supplied by an injected <see cref="NativeBackingAllocator"/>.
-    /// Degrades to <see cref="Pinned"/> when no backing is wired (browser, mobile, or unconfigured).
+    /// When no backing is wired the pool throws by default; a pool constructed with
+    /// <c>allowNativeDegradation: true</c> falls back to <see cref="Pinned"/> instead (browser, mobile,
+    /// or unconfigured hosts) and telemetry records the effective allocation kind.
     /// </summary>
     Native = 2
 }

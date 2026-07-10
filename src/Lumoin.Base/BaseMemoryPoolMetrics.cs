@@ -86,4 +86,12 @@ public static class BaseMemoryPoolMetrics
     /// Unit: operations (cumulative count)
     /// </summary>
     public static readonly string BaseMemoryPoolReturnOperationsTotal = "Lumoin.BaseMemoryPool.ReturnOperationsTotal";
+
+    /// <summary>
+    /// Counter tracking protected-slab canary violations detected on segment return: memory
+    /// outside a rented exact-size span was written. Any non-zero value warrants investigation —
+    /// it means native interop overran a buffer or memory was corrupted.
+    /// Unit: violations (cumulative count)
+    /// </summary>
+    public static readonly string BaseMemoryPoolCanaryViolationsTotal = "Lumoin.BaseMemoryPool.CanaryViolationsTotal";
 }
