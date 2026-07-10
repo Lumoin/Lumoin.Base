@@ -34,11 +34,13 @@ env:
   # grows, add further project names here.
   LIBRARY_PROJECTS: >
     Lumoin.Base
+    Lumoin.Base.MemoryProtection
     Lumoin.Base.Sodium
 
   # Test projects — each compiled executable is an input to dotnet-coverage in its
   # own test step below.
   BASE_TESTS: Lumoin.Base.Tests
+  MEMORY_PROTECTION_TESTS: Lumoin.Base.MemoryProtection.Tests
   SODIUM_TESTS: Lumoin.Base.Sodium.Tests
 
   # Endpoints harden-runner is permitted to reach: NuGet feed access, dotnet tool
@@ -161,6 +163,12 @@ jobs:
     - name: Test
       run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.BASE_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.BASE_TESTS }}' --report-trx --report-trx-filename testresults.trx --results-directory '${{ github.workspace }}/reports'
       timeout-minutes: 20
+
+    # MemoryProtection P/Invokes only kernel32/libc, which every runner ships, so this
+    # suite runs for real on all four legs — VirtualLock on Windows, mlock elsewhere.
+    - name: Test (MemoryProtection)
+      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage-memoryprotection.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.MEMORY_PROTECTION_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.MEMORY_PROTECTION_TESTS }}' --report-trx --report-trx-filename testresults-memoryprotection.trx --results-directory '${{ github.workspace }}/reports'
+      timeout-minutes: 10
 
     # The runners carry no libsodium native library and the family ships its own (no
     # third-party binaries), so the sodium-dependent tests assert inconclusive (skipped)

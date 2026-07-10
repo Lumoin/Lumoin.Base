@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The backing hands page-aligned native pointers to Span/MemoryManager, which needs unsafe. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Description>The operating-system-twin native memory tier for Lumoin.Base: MemoryProtectionBacking implements the NativeBackingAllocator seam so BaseMemoryPool serves AllocationKind.Native rents as page-aligned allocations locked into physical memory (VirtualLock on Windows, mlock plus MADV_DONTDUMP on Linux and Android, mlock on Apple platforms) and zeroed on free. Pure P/Invoke into libraries every supported OS already ships - no native assets, no third-party dependencies.</Description>
+    <PackageTags>mlock;VirtualLock;secure-memory;locked-memory;memory;pool;lumoin</PackageTags>
+  </PropertyGroup>
+
+  <!-- Directory.Build.props adds SupportedPlatform browser to every non-Tests project so the
+       bedrock leaf stays browser-clean. This assembly is a non-browser side of that split: it
+       P/Invokes into kernel32/libc, which cannot exist in a browser target (and would trip CA1416
+       against it), so the browser platform is removed here as the props file comment requires. -->
+  <ItemGroup>
+    <SupportedPlatform Remove="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Lumoin.Base/Lumoin.Base.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Lumoin.Base.MemoryProtection.Tests" />
+  </ItemGroup>
+
+</Project>
