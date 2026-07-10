@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Lumoin.Base/Lumoin.Base.csproj" />
+    <Project Path="src/Lumoin.Base.Sodium/Lumoin.Base.Sodium.csproj" />
   </Folder>
   <Folder Name="/test/">
     <Project Path="test/Lumoin.Base.Tests/Lumoin.Base.Tests.csproj" />
+    <Project Path="test/Lumoin.Base.Sodium.Tests/Lumoin.Base.Sodium.Tests.csproj" />
   </Folder>
 </Solution>

@@ -11,3 +11,13 @@
 Lumoin.Base holds the small set of primitives that every Lumoin library needs and none of them should
 own. It is dependency-free and AOT-, trim-, and browser-clean, so any family member — including
 browser/WASM builds — can consume it, and no member depends on another.
+
+The repository ships two packages. **`Lumoin.Base`** is the dependency-free leaf: `BaseMemoryPool`,
+an exact-size, zero-on-return `MemoryPool<byte>` whose caller chooses how each buffer is backed
+(`Managed`, `Pinned`, or `Native`), and `Tag`, an immutable type-keyed metadata container. The
+native tier is an injection seam (`NativeBackingAllocator`), never a compiled-in dependency.
+**`Lumoin.Base.Sodium`** is the non-browser libsodium implementation of that seam: wiring
+`SodiumBacking.Allocate` into a pool serves `AllocationKind.Native` rents as per-rent isolated
+`sodium_malloc` guarded allocations — canary, guard pages, best-effort memory locking, zero on
+free. The binding is RID-agnostic and carries no native binaries; the libsodium library itself is
+resolved at runtime from family-built native asset packages.

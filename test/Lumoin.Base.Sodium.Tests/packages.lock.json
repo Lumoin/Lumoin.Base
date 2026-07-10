@@ -329,6 +329,12 @@
       "lumoin.base": {
         "type": "Project"
       },
+      "lumoin.base.sodium": {
+        "type": "Project",
+        "dependencies": {
+          "Lumoin.Base": "[0.0.0, )"
+        }
+      },
       "System.Security.Cryptography.Xml": {
         "type": "CentralTransitive",
         "requested": "[10.0.9, )",
