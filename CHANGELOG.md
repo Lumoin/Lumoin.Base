@@ -82,6 +82,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   per-secret hardware guards: hundreds of transient secrets fit a locked-memory budget that holds
   only a handful of isolated allocations. Native rent activities now carry a `nativeRentMode` tag,
   and `TrimExcess` reclaims idle protected regions.
+- New package `Lumoin.Base.MemoryProtection`: the operating-system-twin implementation of the
+  `NativeBackingAllocator` seam — no libsodium, no native assets, no dependencies beyond
+  `Lumoin.Base`. `MemoryProtectionBacking.Allocate` serves `AllocationKind.Native` rents as
+  page-aligned allocations locked into physical memory (`VirtualLock` on Windows, `mlock` plus
+  best-effort `MADV_DONTDUMP` on Linux/Android, `mlock` on Apple platforms and FreeBSD; the C
+  library resolves on glibc and musl alike), zeroed over the whole
+  locked range on disposal, with the same idempotent-dispose and finalizer-backstop owner contract
+  as the Sodium tier. Strict and loud: an exhausted locked-memory budget (`RLIMIT_MEMLOCK`, the
+  Windows minimum working set) throws `InsufficientMemoryException` with the knob named — never a
+  silent fallback to unlocked memory. The OS provides no guard pages or canary here; pair with
+  `NativeRentMode.ProtectedSlab` for software-canary overrun detection on top of the locked
+  region. `MemoryProtectionBacking.IsSupported` reports platform support.
 
 ### Changed
 

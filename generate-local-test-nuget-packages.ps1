@@ -1,5 +1,6 @@
 $projects = @(
     'Lumoin.Base'
+    'Lumoin.Base.MemoryProtection'
     'Lumoin.Base.Sodium'
 )
 

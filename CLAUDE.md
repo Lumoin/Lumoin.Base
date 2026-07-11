@@ -8,8 +8,12 @@ zero-on-return `MemoryPool<byte>` with `AllocationKind` tiers `Managed` / `Pinne
 OpenTelemetry metrics/tracing) and `Tag` (immutable, type-keyed metadata). `Lumoin.Base.Sodium` is
 the non-browser libsodium binding implementing the `NativeBackingAllocator` seam
 (`SodiumBacking.Allocate` → per-rent `sodium_malloc` guarded allocations; RID-agnostic, no native
-assets — the native library resolves at runtime). Single TFM `net10.0`, C# `preview`, SDK pinned
-in `global.json`; tests are MSTest + CsCheck on Microsoft.Testing.Platform.
+assets — the native library resolves at runtime). `Lumoin.Base.MemoryProtection` is the same seam
+via the OS twins (`MemoryProtectionBacking.Allocate` → page-aligned `VirtualLock`/`mlock`+
+`MADV_DONTDUMP` locked allocations; pure P/Invoke into kernel32/libc, zero native assets, strict
+`InsufficientMemoryException` on budget exhaustion — never silent unlocked fallback). Single TFM
+`net10.0`, C# `preview`, SDK pinned in `global.json`; tests are MSTest + CsCheck on
+Microsoft.Testing.Platform; the MemoryProtection suite runs for real on every CI leg.
 
 ## Hard constraints (do not drift)
 
