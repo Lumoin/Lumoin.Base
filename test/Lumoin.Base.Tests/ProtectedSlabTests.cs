@@ -145,7 +145,7 @@ public sealed class ProtectedSlabTests
         foreach(int size in sizes)
         {
             using var owner = pool.Rent(size, AllocationKind.Native);
-            Assert.AreEqual(size, owner.Memory.Length, $"Protected-slab rent of size {size} should return exactly {size} bytes.");
+            Assert.HasCount(size, owner.Memory, $"Protected-slab rent of size {size} should return exactly {size} bytes.");
 
             //Fill rather than write two distinct bytes: for size 1 the first and last byte are
             //the same byte, so distinct sentinel values would overwrite each other.
@@ -241,7 +241,7 @@ public sealed class ProtectedSlabTests
         //The 1-capacity slab now holds only a retired segment; a new rent of the same size must
         //allocate a fresh region rather than hand out the retired one.
         using var next = pool.Rent(bufferSize, AllocationKind.Native);
-        Assert.AreEqual(bufferSize, next.Memory.Length, "The new rent should succeed with a fresh region.");
+        Assert.HasCount(bufferSize, next.Memory, "The new rent should succeed with a fresh region.");
         Assert.AreEqual(2, backing.CallCount, "A retired segment must not be handed out again; the pool allocates a new backing region.");
     }
 
@@ -275,7 +275,7 @@ public sealed class ProtectedSlabTests
         using var other = pool.Rent(otherSize, AllocationKind.Native);
         other.Memory.Span.Fill(0x5A);
 
-        Assert.AreEqual(otherSize, other.Memory.Length, "Pool must remain usable for a different size after a canary violation.");
+        Assert.HasCount(otherSize, other.Memory, "Pool must remain usable for a different size after a canary violation.");
         Assert.AreEqual<byte>(0x5A, other.Memory.Span[0]);
         Assert.AreEqual<byte>(0x5A, other.Memory.Span[otherSize - 1]);
     }
@@ -514,7 +514,7 @@ public sealed class ProtectedSlabTests
         using var degradingPool = new BaseMemoryPool(allowNativeDegradation: true, nativeRentMode: NativeRentMode.ProtectedSlab);
         using var owner = degradingPool.Rent(32, AllocationKind.Native);
 
-        Assert.AreEqual(32, owner.Memory.Length, "A degraded rent falls back to Pinned and is still exact-size.");
+        Assert.HasCount(32, owner.Memory, "A degraded rent falls back to Pinned and is still exact-size.");
     }
 
 

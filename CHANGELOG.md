@@ -110,3 +110,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `Span.Clear`/`Array.Clear`, so the zeroing of returned secrets cannot be elided.
 - `BaseMemoryPool` constructors gained the optional `nativeRentMode` parameter (source-compatible;
   recompile against this version).
+- Dependency refresh across the repository: .NET SDK 10.0.302; MSTest 4.3.2;
+  Microsoft.Testing.Platform extensions 2.3.2; LiquidTestReports.Markdown 2.0.0-beta.6; and the
+  build-time `System.Security.Cryptography.Xml` pin at 10.0.10, addressing published advisories
+  against 10.0.9. The pinned `actions/checkout` and `actions/setup-dotnet` CI actions moved to
+  their latest releases.

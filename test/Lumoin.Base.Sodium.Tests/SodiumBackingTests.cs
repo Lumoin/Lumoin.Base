@@ -36,7 +36,7 @@ public sealed class SodiumBackingTests
         if(SodiumBacking.IsAvailable)
         {
             using var owner = SodiumBacking.Allocate(16);
-            Assert.AreEqual(16, owner.Memory.Length, "Allocate should return exactly the requested size.");
+            Assert.HasCount(16, owner.Memory, "Allocate should return exactly the requested size.");
         }
         else
         {
@@ -59,7 +59,7 @@ public sealed class SodiumBackingTests
         foreach(int size in sizes)
         {
             using var owner = SodiumBacking.Allocate(size);
-            Assert.AreEqual(size, owner.Memory.Length, $"Allocate({size}) should return exactly {size} bytes.");
+            Assert.HasCount(size, owner.Memory, $"Allocate({size}) should return exactly {size} bytes.");
 
             owner.Memory.Span.Fill(0xAB);
             Assert.AreEqual<byte>(0xAB, owner.Memory.Span[0], "First byte should be writable and readable.");
@@ -198,7 +198,7 @@ public sealed class SodiumBackingTests
         using var pool = new BaseMemoryPool(nativeBacking: SodiumBacking.Allocate);
         using var owner = pool.Rent(32, AllocationKind.Native);
 
-        Assert.AreEqual(32, owner.Memory.Length, "Rent should return exactly the requested size.");
+        Assert.HasCount(32, owner.Memory, "Rent should return exactly the requested size.");
 
         owner.Memory.Span.Fill(0x5A);
         Assert.AreEqual<byte>(0x5A, owner.Memory.Span[0]);
@@ -263,10 +263,13 @@ public sealed class SodiumBackingTests
         SodiumTestEnvironment.RequireSodium();
 
         using var owner = SodiumBacking.Allocator(24);
-        Assert.AreEqual(24, owner.Memory.Length, "The cached Allocator delegate should behave exactly like Allocate.");
+        Assert.HasCount(24, owner.Memory, "The cached Allocator delegate should behave exactly like Allocate.");
 
-        //Allocator is a cached delegate instance, not a fresh method-group conversion per read.
-        Assert.AreSame(SodiumBacking.Allocator, SodiumBacking.Allocator);
+        //Allocator is a cached delegate instance, not a fresh method-group conversion per read;
+        //the locals keep the identity check from reading as a constant-true assertion (MSTEST0032).
+        var firstRead = SodiumBacking.Allocator;
+        var secondRead = SodiumBacking.Allocator;
+        Assert.AreSame(firstRead, secondRead);
     }
 
 

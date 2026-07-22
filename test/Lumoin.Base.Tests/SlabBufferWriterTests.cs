@@ -32,7 +32,7 @@ public sealed class SlabBufferWriterTests
         Assert.AreEqual(10, writer.BytesWritten);
 
         using IMemoryOwner<byte> owned = writer.Detach();
-        CollectionAssert.AreEqual(payload, owned.Memory.ToArray(), "Detach must concatenate the slab chain into exactly the written bytes.");
+        Assert.AreSequenceEqual(payload, owned.Memory.ToArray(), "Detach must concatenate the slab chain into exactly the written bytes.");
     }
 
 
@@ -42,7 +42,7 @@ public sealed class SlabBufferWriterTests
         using SlabBufferWriter writer = new(BaseMemoryPool.Shared);
 
         using IMemoryOwner<byte> owned = writer.Detach();
-        Assert.AreEqual(0, owned.Memory.Length);
+        Assert.HasCount(0, owned.Memory);
     }
 
 
@@ -57,7 +57,7 @@ public sealed class SlabBufferWriterTests
 
         WriteBytes(writer, [9, 8]);
         using IMemoryOwner<byte> owned = writer.Detach();
-        CollectionAssert.AreEqual(new byte[] { 9, 8 }, owned.Memory.ToArray());
+        Assert.AreSequenceEqual(new byte[] { 9, 8 }, owned.Memory.ToArray());
     }
 
 

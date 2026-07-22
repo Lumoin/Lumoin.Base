@@ -64,7 +64,7 @@ public sealed class BaseMemoryPoolTests
         foreach(int size in testSizes)
         {
             using var buffer = pool.Rent(size);
-            Assert.AreEqual(size, buffer.Memory.Length, $"Buffer size should be exactly {size} bytes.");
+            Assert.HasCount(size, buffer.Memory, $"Buffer size should be exactly {size} bytes.");
         }
     }
 
@@ -82,7 +82,7 @@ public sealed class BaseMemoryPoolTests
         foreach(int size in testSizes)
         {
             using var buffer = pool.Rent(size, kind);
-            Assert.AreEqual(size, buffer.Memory.Length, $"Buffer size should be exactly {size} bytes for {kind}.");
+            Assert.HasCount(size, buffer.Memory, $"Buffer size should be exactly {size} bytes for {kind}.");
         }
     }
 
@@ -93,7 +93,7 @@ public sealed class BaseMemoryPoolTests
         using var pool = new BaseMemoryPool();
         using var buffer = pool.Rent(37);
 
-        Assert.AreEqual(37, buffer.Memory.Length);
+        Assert.HasCount(37, buffer.Memory);
 
         buffer.Memory.Span.Fill(0xAB);
         Assert.AreEqual<byte>(0xAB, buffer.Memory.Span[0]);
@@ -119,7 +119,7 @@ public sealed class BaseMemoryPoolTests
 
             foreach(var buffer in buffers)
             {
-                Assert.AreEqual(bufferSize, buffer.Memory.Length);
+                Assert.HasCount(bufferSize, buffer.Memory);
             }
         }
         finally
@@ -153,7 +153,7 @@ public sealed class BaseMemoryPoolTests
 
             foreach(var buffer in buffers)
             {
-                Assert.AreEqual(bufferSize, buffer.Memory.Length);
+                Assert.HasCount(bufferSize, buffer.Memory);
             }
         }
         finally
@@ -250,7 +250,7 @@ public sealed class BaseMemoryPoolTests
 
         using(var buffer = pool.Rent(1))
         {
-            Assert.AreEqual(1, buffer.Memory.Length);
+            Assert.HasCount(1, buffer.Memory);
         }
 
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => pool.Rent(0));
@@ -361,7 +361,7 @@ public sealed class BaseMemoryPoolTests
         Assert.AreSame(first, second, "Shared should return the same instance.");
 
         using var buffer = first.Rent(64);
-        Assert.AreEqual(64, buffer.Memory.Length);
+        Assert.HasCount(64, buffer.Memory);
     }
 
 
@@ -462,7 +462,7 @@ public sealed class BaseMemoryPoolTests
 
         //Pool should create fresh slabs on demand after trimming.
         using var afterTrim = pool.Rent(64);
-        Assert.AreEqual(64, afterTrim.Memory.Length, "Rent should work after TrimExcess reclaims slabs.");
+        Assert.HasCount(64, afterTrim.Memory, "Rent should work after TrimExcess reclaims slabs.");
     }
 
 
@@ -472,7 +472,7 @@ public sealed class BaseMemoryPoolTests
         using var pool = new BaseMemoryPool(allowNativeDegradation: true);
         using var owner = pool.Rent(32, AllocationKind.Native);
 
-        Assert.AreEqual(32, owner.Memory.Length);
+        Assert.HasCount(32, owner.Memory);
 
         owner.Memory.Span.Fill(0xAB);
         Assert.AreEqual<byte>(0xAB, owner.Memory.Span[31]);
@@ -488,7 +488,7 @@ public sealed class BaseMemoryPoolTests
         using var owner = pool.Rent(24, AllocationKind.Native);
 
         Assert.IsGreaterThanOrEqualTo(1, callCount.Value, "A wired native backing must serve AllocationKind.Native.");
-        Assert.AreEqual(24, owner.Memory.Length);
+        Assert.HasCount(24, owner.Memory);
     }
 
 
@@ -534,7 +534,7 @@ public sealed class BaseMemoryPoolTests
         using var pool = new BaseMemoryPool(CountingBacking(callCount), allowNativeDegradation: false);
         using var owner = pool.Rent(48, AllocationKind.Native);
 
-        Assert.AreEqual(48, owner.Memory.Length);
+        Assert.HasCount(48, owner.Memory);
         Assert.AreEqual(1, callCount.Value, "A wired native backing must serve Native even when degradation is disallowed.");
     }
 
@@ -837,7 +837,7 @@ public sealed class BaseMemoryPoolTests
 
         //Pool should still be functional after cross-thread return.
         using var subsequent = pool.Rent(128);
-        Assert.AreEqual(128, subsequent.Memory.Length,
+        Assert.HasCount(128, subsequent.Memory,
             "Pool must remain usable after cross-thread disposal.");
     }
 
@@ -968,6 +968,6 @@ public sealed class BaseMemoryPoolTests
         //After the storm settles every rental has been returned, so the pool must be
         //fully reusable.
         using var afterStorm = pool.Rent(bufferSize, kind);
-        Assert.AreEqual(bufferSize, afterStorm.Memory.Length, "Pool must remain usable after concurrent rent/return.");
+        Assert.HasCount(bufferSize, afterStorm.Memory, "Pool must remain usable after concurrent rent/return.");
     }
 }
