@@ -23,7 +23,7 @@ public sealed class BaseMemoryPoolCsCheckTests
             using var pool = new BaseMemoryPool();
             using var buffer = pool.Rent(bufferSize);
 
-            Assert.AreEqual(bufferSize, buffer.Memory.Length,
+            Assert.HasCount(bufferSize, buffer.Memory,
                 $"Buffer size {bufferSize} should return exactly {bufferSize} elements.");
         });
     }
@@ -41,7 +41,7 @@ public sealed class BaseMemoryPoolCsCheckTests
             using var pool = new BaseMemoryPool(size => new ArrayOwner(size));
             using var buffer = pool.Rent(bufferSize, kind);
 
-            Assert.AreEqual(bufferSize, buffer.Memory.Length,
+            Assert.HasCount(bufferSize, buffer.Memory,
                 $"Buffer size {bufferSize} should return exactly {bufferSize} elements for {kind}.");
         });
     }
@@ -59,7 +59,7 @@ public sealed class BaseMemoryPoolCsCheckTests
                 int bufferSize = (i % 10) + 1;
                 using var buffer = pool.Rent(bufferSize);
 
-                Assert.AreEqual(bufferSize, buffer.Memory.Length);
+                Assert.HasCount(bufferSize, buffer.Memory);
 
                 if(buffer.Memory.Length > 0)
                 {
@@ -91,7 +91,7 @@ public sealed class BaseMemoryPoolCsCheckTests
                             int size = (j % 50) + 1;
                             using var buffer = pool.Rent(size);
 
-                            Assert.AreEqual(size, buffer.Memory.Length);
+                            Assert.HasCount(size, buffer.Memory);
 
                             if(buffer.Memory.Length > 0)
                             {
@@ -170,7 +170,7 @@ public sealed class BaseMemoryPoolCsCheckTests
                     var buffer = pool.Rent(size);
                     buffers.Add(buffer);
 
-                    Assert.AreEqual(size, buffer.Memory.Length);
+                    Assert.HasCount(size, buffer.Memory);
                 }
             }
             finally

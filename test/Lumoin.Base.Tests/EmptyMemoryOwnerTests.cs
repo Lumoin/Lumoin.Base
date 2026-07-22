@@ -12,12 +12,16 @@ public sealed class EmptyMemoryOwnerTests
     [TestMethod]
     public void InstanceIsAZeroLengthSingletonWithNoOpDispose()
     {
-        Assert.AreSame(EmptyMemoryOwner.Instance, EmptyMemoryOwner.Instance);
-        Assert.AreEqual(0, EmptyMemoryOwner.Instance.Memory.Length);
+        //Two separate property reads must observe the same shared instance; the locals keep the
+        //identity check from reading as a constant-true assertion (MSTEST0032).
+        var firstRead = EmptyMemoryOwner.Instance;
+        var secondRead = EmptyMemoryOwner.Instance;
+        Assert.AreSame(firstRead, secondRead);
+        Assert.HasCount(0, EmptyMemoryOwner.Instance.Memory);
 
         //No-op dispose: safe to call repeatedly, and the instance stays usable afterwards.
         EmptyMemoryOwner.Instance.Dispose();
         EmptyMemoryOwner.Instance.Dispose();
-        Assert.AreEqual(0, EmptyMemoryOwner.Instance.Memory.Length);
+        Assert.HasCount(0, EmptyMemoryOwner.Instance.Memory);
     }
 }

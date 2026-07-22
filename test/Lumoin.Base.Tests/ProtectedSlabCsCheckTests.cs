@@ -24,7 +24,7 @@ public sealed class ProtectedSlabCsCheckTests
             using var pool = new BaseMemoryPool(nativeBacking: s => new ArrayOwner(s), nativeRentMode: NativeRentMode.ProtectedSlab);
             using var owner = pool.Rent(size, AllocationKind.Native);
 
-            Assert.AreEqual(size, owner.Memory.Length, $"Protected-slab rent of size {size} should return exactly {size} bytes.");
+            Assert.HasCount(size, owner.Memory, $"Protected-slab rent of size {size} should return exactly {size} bytes.");
 
             byte pattern = (byte)(size % 256);
             owner.Memory.Span.Fill(pattern);
@@ -91,7 +91,7 @@ public sealed class ProtectedSlabCsCheckTests
 
         //After the storm settles every rental has been returned, so the pool must be fully usable.
         using var afterStorm = pool.Rent(bufferSize, AllocationKind.Native);
-        Assert.AreEqual(bufferSize, afterStorm.Memory.Length, "Pool must remain usable after concurrent protected-slab rent/return.");
+        Assert.HasCount(bufferSize, afterStorm.Memory, "Pool must remain usable after concurrent protected-slab rent/return.");
     }
 
 

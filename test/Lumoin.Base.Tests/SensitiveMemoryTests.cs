@@ -36,8 +36,8 @@ public sealed class SensitiveMemoryTests
         byte[] bytes = [10, 20, 30];
         using TestDocument document = new(new HeldOwner(bytes), Tag.Empty);
 
-        CollectionAssert.AreEqual(bytes, document.AsReadOnlySpan().ToArray());
-        CollectionAssert.AreEqual(bytes, document.AsReadOnlyMemory().ToArray());
+        Assert.AreSequenceEqual(bytes, document.AsReadOnlySpan().ToArray());
+        Assert.AreSequenceEqual(bytes, document.AsReadOnlyMemory().ToArray());
     }
 
 
@@ -50,7 +50,7 @@ public sealed class SensitiveMemoryTests
 
         document.Dispose();
 
-        CollectionAssert.AreEqual(new byte[] { 0, 0, 0, 0 }, owner.Buffer, "Dispose must wipe the sensitive bytes.");
+        Assert.AreSequenceEqual(new byte[] { 0, 0, 0, 0 }, owner.Buffer, "Dispose must wipe the sensitive bytes.");
     }
 
 
@@ -114,7 +114,7 @@ public sealed class SensitiveMemoryTests
         shared.Dispose();
 
         //The guard skipped the disposed transition, so a shared empty stays usable for later callers.
-        Assert.AreEqual(0, shared.AsReadOnlySpan().Length);
-        Assert.AreEqual(0, shared.AsReadOnlyMemory().Length);
+        Assert.HasCount(0, shared.AsReadOnlySpan());
+        Assert.HasCount(0, shared.AsReadOnlyMemory());
     }
 }

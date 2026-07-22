@@ -53,7 +53,7 @@ public sealed class MemoryProtectionBackingTests
         foreach(int size in sizes)
         {
             using var owner = MemoryProtectionBacking.Allocate(size);
-            Assert.AreEqual(size, owner.Memory.Length, $"Allocate({size}) should return exactly {size} bytes.");
+            Assert.HasCount(size, owner.Memory, $"Allocate({size}) should return exactly {size} bytes.");
 
             //Fresh native memory is uninitialized; MemoryProtectionBacking must hand out zeroed
             //bytes regardless, so check this BEFORE writing anything.
@@ -210,7 +210,7 @@ public sealed class MemoryProtectionBackingTests
         using var pool = new BaseMemoryPool(nativeBacking: MemoryProtectionBacking.Allocate);
         using var owner = pool.Rent(32, AllocationKind.Native);
 
-        Assert.AreEqual(32, owner.Memory.Length, "Rent should return exactly the requested size.");
+        Assert.HasCount(32, owner.Memory, "Rent should return exactly the requested size.");
 
         owner.Memory.Span.Fill(0x5A);
         Assert.AreEqual<byte>(0x5A, owner.Memory.Span[0]);
@@ -321,9 +321,12 @@ public sealed class MemoryProtectionBackingTests
     public void AllocatorDelegateAllocates()
     {
         using var owner = MemoryProtectionBacking.Allocator(24);
-        Assert.AreEqual(24, owner.Memory.Length, "The cached Allocator delegate should behave exactly like Allocate.");
+        Assert.HasCount(24, owner.Memory, "The cached Allocator delegate should behave exactly like Allocate.");
 
-        //Allocator is a cached delegate instance, not a fresh method-group conversion per read.
-        Assert.AreSame(MemoryProtectionBacking.Allocator, MemoryProtectionBacking.Allocator);
+        //Allocator is a cached delegate instance, not a fresh method-group conversion per read;
+        //the locals keep the identity check from reading as a constant-true assertion (MSTEST0032).
+        var firstRead = MemoryProtectionBacking.Allocator;
+        var secondRead = MemoryProtectionBacking.Allocator;
+        Assert.AreSame(firstRead, secondRead);
     }
 }
