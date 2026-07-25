@@ -6,8 +6,8 @@
          to the crypto P/Invokes as a raw pointer: reading MemoryHandle.Pointer (a void*) after
          pinning to obtain that nint requires unsafe context. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Description>The libsodium crypto binding for the Lumoin family: Ed25519 seed-keypair generation, detached signing and verification, Ed25519-to-X25519 key conversion and X25519 scalar multiplication as thin Span-based LibraryImport wrappers. Secret-key scratch memory is composed by the caller as a MemoryPool&lt;byte&gt; (guarded native, locked, pinned or managed backing), so the binding depends only on Lumoin.Base, carries no native assets and is identical on every target. The libsodium native library resolves at runtime on desktop and server targets and is statically linked at publish on browser-wasm.</Description>
-    <PackageTags>libsodium;sodium;ed25519;x25519;curve25519;signing;verification;key-conversion;lumoin</PackageTags>
+    <Description>The libsodium crypto binding for the Lumoin family: Ed25519 seed-keypair generation, detached signing and verification, Ed25519-to-X25519 key conversion, X25519 scalar multiplication, XChaCha20-Poly1305 authenticated encryption, and the ML-KEM-768 (FIPS 203) and X-Wing hybrid post-quantum KEMs as thin Span-based LibraryImport wrappers. Secret-key scratch memory is composed by the caller as a MemoryPool&lt;byte&gt; (guarded native, locked, pinned or managed backing), so the binding depends only on Lumoin.Base, carries no native assets and is identical on every target. The libsodium native library resolves at runtime on desktop and server targets and is statically linked at publish on browser-wasm.</Description>
+    <PackageTags>libsodium;sodium;ed25519;x25519;curve25519;signing;verification;key-conversion;xchacha20poly1305;aead;ml-kem;x-wing;post-quantum;lumoin</PackageTags>
   </PropertyGroup>
 
   <!-- Directory.Build.props adds SupportedPlatform browser to every non-Tests project. Unlike

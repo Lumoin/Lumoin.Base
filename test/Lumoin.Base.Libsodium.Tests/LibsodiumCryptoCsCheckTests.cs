@@ -49,4 +49,36 @@ public sealed class LibsodiumCryptoCsCheckTests
                 $"A signature with bit {signatureBitToFlip} flipped must not verify.");
         });
     }
+
+
+    [TestMethod]
+    public void PropertyAeadRoundTripsAndRejectsCiphertextBitFlips()
+    {
+        LibsodiumTestEnvironment.RequireSodium();
+
+        //Any key, nonce, message and associated data must round-trip, and flipping any single bit
+        //of the sealed output (ciphertext body or tag alike) must fail authentication.
+        Gen.Select(
+            Gen.Byte.Array[LibsodiumCrypto.XChaCha20Poly1305KeyLength],
+            Gen.Byte.Array[LibsodiumCrypto.XChaCha20Poly1305NonceLength],
+            Gen.Byte.Array[0, 256],
+            Gen.Byte.Array[0, 64],
+            Gen.Int[0, int.MaxValue])
+        .Sample((key, nonce, message, associatedData, bitSeed) =>
+        {
+            Span<byte> ciphertext = stackalloc byte[message.Length + LibsodiumCrypto.XChaCha20Poly1305TagLength];
+            Assert.AreEqual(0, LibsodiumCrypto.AeadXChaCha20Poly1305Encrypt(ciphertext, message, associatedData, nonce, key),
+                "Encryption should succeed.");
+
+            Span<byte> decrypted = stackalloc byte[message.Length];
+            Assert.AreEqual(0, LibsodiumCrypto.AeadXChaCha20Poly1305Decrypt(decrypted, ciphertext, associatedData, nonce, key),
+                "Decryption should succeed.");
+            Assert.IsTrue(decrypted.SequenceEqual(message), "The round-tripped plaintext must match.");
+
+            int bitToFlip = bitSeed % (ciphertext.Length * 8);
+            ciphertext[bitToFlip / 8] ^= (byte)(1 << (bitToFlip % 8));
+            Assert.AreNotEqual(0, LibsodiumCrypto.AeadXChaCha20Poly1305Decrypt(decrypted, ciphertext, associatedData, nonce, key),
+                $"Sealed output with bit {bitToFlip} flipped must not decrypt.");
+        });
+    }
 }

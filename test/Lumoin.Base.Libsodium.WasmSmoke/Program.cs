@@ -71,6 +71,42 @@ try
     Check("ScalarMultBase on the converted scalar returns 0",
         LibsodiumCrypto.ScalarMultBase(derivedPublicKey, curvePrivateKeyOwner.Memory.Span) == 0);
     Check("both conversion routes agree", derivedPublicKey.SequenceEqual(curvePublicKeyOwner.Memory.Span));
+
+    //XChaCha20-Poly1305 AEAD: round-trip and tamper rejection inside dotnet.wasm.
+    Span<byte> aeadKey = stackalloc byte[LibsodiumCrypto.XChaCha20Poly1305KeyLength];
+    Span<byte> aeadNonce = stackalloc byte[LibsodiumCrypto.XChaCha20Poly1305NonceLength];
+    LibsodiumCrypto.RandomBytes(aeadKey);
+    LibsodiumCrypto.RandomBytes(aeadNonce);
+    ReadOnlySpan<byte> aeadMessage = "wasm smoke"u8;
+    Span<byte> aeadCiphertext = stackalloc byte[aeadMessage.Length + LibsodiumCrypto.XChaCha20Poly1305TagLength];
+    Check("AEAD encrypt returns 0",
+        LibsodiumCrypto.AeadXChaCha20Poly1305Encrypt(aeadCiphertext, aeadMessage, default, aeadNonce, aeadKey) == 0);
+    Span<byte> aeadDecrypted = stackalloc byte[aeadMessage.Length];
+    Check("AEAD decrypt round-trips",
+        LibsodiumCrypto.AeadXChaCha20Poly1305Decrypt(aeadDecrypted, aeadCiphertext, default, aeadNonce, aeadKey) == 0
+        && aeadDecrypted.SequenceEqual(aeadMessage));
+    aeadCiphertext[0] ^= 0x01;
+    Check("AEAD rejects tampered ciphertext",
+        LibsodiumCrypto.AeadXChaCha20Poly1305Decrypt(aeadDecrypted, aeadCiphertext, default, aeadNonce, aeadKey) != 0);
+
+    //X-Wing hybrid KEM (which internally exercises ML-KEM-768 + X25519) inside dotnet.wasm.
+    using var kemSecretOwner = LibsodiumCrypto.AllocateSecretScratch(
+        scratchPool, LibsodiumCrypto.XWingSecretKeyLength, "Smoke KEM scratch allocation failed.");
+    using var kemSecretHandle = kemSecretOwner.Memory.Pin();
+    nint kemSecret;
+    unsafe
+    {
+        kemSecret = (nint)kemSecretHandle.Pointer;
+    }
+
+    byte[] kemPublicKey = new byte[LibsodiumCrypto.XWingPublicKeyLength];
+    Check("X-Wing keypair returns 0", LibsodiumCrypto.XWingKeypair(kemPublicKey, kemSecret) == 0);
+    Span<byte> kemCiphertext = stackalloc byte[LibsodiumCrypto.XWingCiphertextLength];
+    Span<byte> kemEncapsulated = stackalloc byte[LibsodiumCrypto.XWingSharedSecretLength];
+    Check("X-Wing encapsulate returns 0", LibsodiumCrypto.XWingEncapsulate(kemCiphertext, kemEncapsulated, kemPublicKey) == 0);
+    Span<byte> kemDecapsulated = stackalloc byte[LibsodiumCrypto.XWingSharedSecretLength];
+    Check("X-Wing decapsulate returns 0", LibsodiumCrypto.XWingDecapsulate(kemDecapsulated, kemCiphertext, kemSecret) == 0);
+    Check("X-Wing shared secrets agree", kemDecapsulated.SequenceEqual(kemEncapsulated));
 }
 catch (Exception ex)
 {

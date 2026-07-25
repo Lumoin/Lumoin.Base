@@ -27,8 +27,9 @@ Windows, `mlock` plus best-effort `MADV_DONTDUMP` on Linux/Android, `mlock` on A
 and FreeBSD), zeroed on free — pure P/Invoke into libraries every supported OS already ships
 (glibc and musl alike), so it carries no native assets at all.
 **`Lumoin.Base.Libsodium`** is a raw libsodium crypto binding: Ed25519 seed-keypair generation,
-detached signing and verification, Ed25519-to-X25519 key conversion, and X25519 scalar
-multiplication. Secret-key scratch memory is composed by the caller as a `MemoryPool<byte>`, so the
+detached signing and verification, Ed25519-to-X25519 key conversion, X25519 scalar
+multiplication, XChaCha20-Poly1305 authenticated encryption, and the ML-KEM-768 (FIPS 203) and
+X-Wing hybrid post-quantum KEMs. Secret-key scratch memory is composed by the caller as a `MemoryPool<byte>`, so the
 binding depends only on `Lumoin.Base` and carries no native assets of its own; the libsodium
 native library resolves at runtime on desktop and server targets and is statically linked at
 publish on browser-wasm.
