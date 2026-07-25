@@ -12,7 +12,7 @@ Lumoin.Base holds the small set of primitives that every Lumoin library needs an
 own. It is dependency-free and AOT-, trim-, and browser-clean, so any family member — including
 browser/WASM builds — can consume it, and no member depends on another.
 
-The repository ships three packages. **`Lumoin.Base`** is the dependency-free leaf: `BaseMemoryPool`,
+The repository ships four packages. **`Lumoin.Base`** is the dependency-free leaf: `BaseMemoryPool`,
 an exact-size, zero-on-return `MemoryPool<byte>` whose caller chooses how each buffer is backed
 (`Managed`, `Pinned`, or `Native`), and `Tag`, an immutable type-keyed metadata container. The
 native tier is an injection seam (`NativeBackingAllocator`), never a compiled-in dependency.
@@ -26,3 +26,10 @@ locked into physical memory through the operating system's own mechanism (`Virtu
 Windows, `mlock` plus best-effort `MADV_DONTDUMP` on Linux/Android, `mlock` on Apple platforms
 and FreeBSD), zeroed on free — pure P/Invoke into libraries every supported OS already ships
 (glibc and musl alike), so it carries no native assets at all.
+**`Lumoin.Base.Libsodium`** is a raw libsodium crypto binding: Ed25519 seed-keypair generation,
+detached signing and verification, Ed25519-to-X25519 key conversion, X25519 scalar
+multiplication, XChaCha20-Poly1305 authenticated encryption, and the ML-KEM-768 (FIPS 203) and
+X-Wing hybrid post-quantum KEMs. Secret-key scratch memory is composed by the caller as a `MemoryPool<byte>`, so the
+binding depends only on `Lumoin.Base` and carries no native assets of its own; the libsodium
+native library resolves at runtime on desktop and server targets and is statically linked at
+publish on browser-wasm.

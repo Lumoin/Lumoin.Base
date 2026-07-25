@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+    <!--
+        For instance platform specific tests are asserted as inconclusive when they
+        cannot be run on a given platform.
+    -->
+    <MapInconclusiveToFailed>False</MapInconclusiveToFailed>
+    <Parallelize>
+        <Workers>0</Workers>
+        <Scope>MethodLevel</Scope>
+    </Parallelize>
+    <!--
+        CsCheck property tests run unseeded so they keep exploring new cases. Do NOT pin CsCheck_Seed
+        here: a fixed seed would collapse every Gen...Sample run to one example and kill exploration.
+        To reproduce a specific failure, set the seed on the command line for one session instead (the
+        failure message prints it, e.g. CsCheck_Seed=0ycPmO1H_kG7).
+
+        If you must temporarily reproduce inside the test host, uncomment and edit this section locally
+        (never commit it):
+
+        <RunConfiguration>
+            <EnvironmentVariables>
+                <CsCheck_Seed>PASTE_SEED_FROM_FAILURE_MESSAGE</CsCheck_Seed>
+                <CsCheck_Iter>1000</CsCheck_Iter>
+            </EnvironmentVariables>
+        </RunConfiguration>
+    -->
+</RunSettings>
