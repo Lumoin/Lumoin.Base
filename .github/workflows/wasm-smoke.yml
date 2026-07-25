@@ -1,0 +1,119 @@
+name: Lumoin.Base wasm smoke
+
+# Experimental leg, deliberately separate from main.yml: builds the family static libsodium at
+# the exact Emscripten version the .NET 11 preview wasm-tools workload pins, statically links it
+# into dotnet.wasm through the Lumoin.Base.Libsodium.WasmSmoke app, and executes the smoke under
+# Node. Its job is to notice, ahead of the family's net11.0 move, when a new .NET 11 preview
+# bumps the Emscripten pin or changes wasm marshalling in a way that breaks the binding.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "src/Lumoin.Base/**"
+      - "src/Lumoin.Base.Libsodium/**"
+      - "test/Lumoin.Base.Libsodium.WasmSmoke/**"
+      - ".github/workflows/wasm-smoke.yml"
+  pull_request:
+    paths:
+      - "src/Lumoin.Base/**"
+      - "src/Lumoin.Base.Libsodium/**"
+      - "test/Lumoin.Base.Libsodium.WasmSmoke/**"
+      - ".github/workflows/wasm-smoke.yml"
+  schedule:
+    # Weekly: a new .NET 11 preview may bump the pinned Emscripten; this rebuilds the static
+    # libsodium at the new pin and re-runs the smoke against it.
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_NOLOGO: true
+  NUGET_XMLDOC_MODE: skip
+
+  # The preview SDK and the wasm-tools workload are installed into a runner-writable
+  # directory: the runner's default /usr/share/dotnet needs sudo for workload installs,
+  # and harden-runner runs with sudo disabled.
+  DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+  DOTNET_ROOT: ${{ runner.temp }}/dotnet
+
+  # The family builds its own native assets from the pinned upstream tag — never from
+  # third-party repackagings. Keep in sync with the family libsodium fork once it exists.
+  LIBSODIUM_TAG: 1.0.22-RELEASE
+  LIBSODIUM_VERSION: 1.0.22
+
+  # The smoke project carries its own global.json (a .NET 11 preview, rollForward
+  # latestFeature), so every dotnet invocation below runs from this directory to escape
+  # the repository root's .NET 10 SDK pin.
+  SMOKE_DIR: test/Lumoin.Base.Libsodium.WasmSmoke
+
+jobs:
+  wasm-smoke:
+    name: libsodium in dotnet.wasm (.NET 11 preview)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Harden Runner
+      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+      with:
+        disable-sudo: true
+        # Audit rather than block: the preview SDK, the wasm-tools workload, and the emsdk
+        # bootstrap download from endpoint sets that shift between previews. Tighten to
+        # block with an explicit allowlist when this leg stops being experimental (.NET 11 GA).
+        egress-policy: audit
+
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+    - name: Set up .NET 11 preview SDK
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      with:
+        dotnet-version: 11.0.x
+        dotnet-quality: preview
+
+    - name: Install the wasm-tools workload
+      working-directory: ${{ env.SMOKE_DIR }}
+      run: dotnet workload install wasm-tools --include-previews
+
+    - name: Discover the workload's Emscripten pin
+      id: emsdk
+      run: |
+        set -euo pipefail
+        pin="$(ls "$DOTNET_ROOT/packs" | grep -oP '^Microsoft\.NET\.Runtime\.Emscripten\.\K[0-9]+\.[0-9]+\.[0-9]+(?=\.Sdk\.)' | head -n 1)"
+        test -n "$pin"
+        echo "Workload Emscripten pin: $pin"
+        echo "version=$pin" >> "$GITHUB_OUTPUT"
+
+    - name: Build static libsodium with the pinned Emscripten
+      run: |
+        set -euo pipefail
+        pin='${{ steps.emsdk.outputs.version }}'
+        git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+        "$RUNNER_TEMP/emsdk/emsdk" install "$pin"
+        "$RUNNER_TEMP/emsdk/emsdk" activate "$pin"
+        source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+        mkdir -p "$RUNNER_TEMP/libsodium-src"
+        curl -fsSL "https://github.com/jedisct1/libsodium/releases/download/${LIBSODIUM_TAG}/libsodium-${LIBSODIUM_VERSION}.tar.gz" | tar -xz -C "$RUNNER_TEMP/libsodium-src" --strip-components=1
+        cd "$RUNNER_TEMP/libsodium-src"
+        emconfigure ./configure --disable-shared --without-pthreads --disable-ssp --disable-asm --disable-pie --prefix="$RUNNER_TEMP/libsodium-wasm"
+        emmake make -j"$(nproc)" install
+        test -f "$RUNNER_TEMP/libsodium-wasm/lib/libsodium.a"
+
+    - name: Publish the smoke app
+      working-directory: ${{ env.SMOKE_DIR }}
+      run: dotnet publish -c Release "-p:LibsodiumStaticLibrary=$RUNNER_TEMP/libsodium-wasm/lib/libsodium.a"
+
+    - name: Run the smoke under the workload's Node
+      working-directory: ${{ env.SMOKE_DIR }}
+      run: |
+        set -euo pipefail
+        node="$(ls -d "$DOTNET_ROOT"/packs/Microsoft.NET.Runtime.Emscripten.*.Node.linux-x64/*/tools/bin/node | head -n 1)"
+        "$node" --version
+        # .NET 11's wasm runtime uses the exnref exception-handling proposal; the workload's
+        # Node (v24 in preview 6) needs the flag until exnref is on by default in its V8.
+        "$node" --experimental-wasm-exnref bin/Release/net11.0/publish/wwwroot/main.mjs

@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+
+  <PropertyGroup>
+    <!-- browser-wasm needs .NET 11's Emscripten toolchain (see the wasm-smoke workflow); the rest
+         of the repository stays on the net10.0 TFM pinned in Directory.Build.props. -->
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+
+    <!-- Same reason as the shipping library and its test project: obtaining the scratch pointer
+         from MemoryHandle.Pointer requires unsafe context. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- A smoke host, not a shippable library: trim/AOT analyzers and the resource-table rule for
+         console literals (CA1303) would only produce noise here, matching the test projects. -->
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
+    <NoWarn>$(NoWarn);CA1303</NoWarn>
+
+    <!-- Not part of the locked-restore solution build (deliberately absent from Lumoin.Base.slnx):
+         only the wasm-smoke workflow restores this project, on a preview SDK whose implicit package
+         graph shifts per preview, so a committed lock file would churn without adding integrity. -->
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+
+    <!-- Relink dotnet.wasm with the family-built static libsodium. The archive path comes in via
+         -p:LibsodiumStaticLibrary=<path to libsodium.a>; without it the project still compiles but
+         the smoke run would fail at the first native call — the workflow always passes it. -->
+    <WasmBuildNative Condition="'$(LibsodiumStaticLibrary)' != ''">true</WasmBuildNative>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(LibsodiumStaticLibrary)' != ''">
+    <NativeFileReference Include="$(LibsodiumStaticLibrary)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Lumoin.Base/Lumoin.Base.csproj" />
+    <ProjectReference Include="../../src/Lumoin.Base.Libsodium/Lumoin.Base.Libsodium.csproj" />
+  </ItemGroup>
+
+</Project>
