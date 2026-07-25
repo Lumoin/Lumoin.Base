@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Assets-only package: the runtimes/<rid>/native libsodium binaries, built by
+         .github/workflows/native-assets.yml from the pinned, checksum-verified upstream release
+         tarball on GitHub-hosted runners - never from third-party repackagings. No managed code
+         and no dependencies ship in this package.
+
+         Deliberately OUTSIDE Lumoin.Base.slnx and main.yml's LIBRARY_PROJECTS (the documented
+         exception to the new-packable-project checklist): a normal checkout has no binaries to
+         pack, so only the native-assets workflow packs this project, staging the built binaries
+         and passing -p:NativeAssetsStagingDirectory. Its version follows the libsodium source
+         version (e.g. 1.0.22), not the library release train. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <!-- Directory.Build.props turns on snupkg symbol packages for every project; with no managed
+         output there are no PDBs and the symbols pack fails with NU5017. -->
+    <IncludeSymbols>false</IncludeSymbols>
+    <!-- Package validation compares managed API surface across TFMs/baselines; this package has
+         neither, so the validation task has nothing to check and is disabled. -->
+    <EnablePackageValidation>false</EnablePackageValidation>
+    <Description>The libsodium native runtime binaries for the Lumoin family: runtimes/rid/native assets (win-x64, linux-x64, linux-arm64, osx-x64, osx-arm64) built by the family from the pinned upstream libsodium release source in this repository's CI. Referenced by Lumoin.Base.Libsodium and Lumoin.Base.Sodium so the module name libsodium resolves out of the box; carries no managed code.</Description>
+    <PackageTags>libsodium;sodium;native;runtimes;native-assets;lumoin</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(NativeAssetsStagingDirectory)' != ''">
+    <None Include="$(NativeAssetsStagingDirectory)/**/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- Refuse to produce an empty package: packing without a populated staging directory is
+       always a mistake (only the native-assets workflow packs this project). -->
+  <Target Name="EnsureNativeAssetsStaged" BeforeTargets="GenerateNuspec">
+    <Error Condition="'$(NativeAssetsStagingDirectory)' == ''"
+           Text="Lumoin.Base.Libsodium.NativeAssets packs prebuilt binaries: pass -p:NativeAssetsStagingDirectory=&lt;dir with rid/native/libsodium.*&gt;. See .github/workflows/native-assets.yml." />
+    <Error Condition="'$(NativeAssetsStagingDirectory)' != '' AND !Exists('$(NativeAssetsStagingDirectory)')"
+           Text="NativeAssetsStagingDirectory '$(NativeAssetsStagingDirectory)' does not exist." />
+  </Target>
+
+</Project>
