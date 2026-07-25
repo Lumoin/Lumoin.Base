@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The Ed25519 expanded secret key lives only in caller-supplied scratch memory and is handed
+         to the crypto P/Invokes as a raw pointer: reading MemoryHandle.Pointer (a void*) after
+         pinning to obtain that nint requires unsafe context. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Description>The libsodium crypto binding for the Lumoin family: Ed25519 seed-keypair generation, detached signing and verification, Ed25519-to-X25519 key conversion and X25519 scalar multiplication as thin Span-based LibraryImport wrappers. Secret-key scratch memory is composed by the caller as a MemoryPool&lt;byte&gt; (guarded native, locked, pinned or managed backing), so the binding depends only on Lumoin.Base, carries no native assets and is identical on every target. The libsodium native library resolves at runtime on desktop and server targets and is statically linked at publish on browser-wasm.</Description>
+    <PackageTags>libsodium;sodium;ed25519;x25519;curve25519;signing;verification;key-conversion;lumoin</PackageTags>
+  </PropertyGroup>
+
+  <!-- Directory.Build.props adds SupportedPlatform browser to every non-Tests project. Unlike
+       Lumoin.Base.Sodium and Lumoin.Base.MemoryProtection, whose memory-protection P/Invokes cannot
+       exist in a browser, this binding KEEPS the browser platform on purpose: the same LibraryImport
+       bindings are satisfied on browser-wasm by statically linking a family-built libsodium.a into
+       dotnet.wasm at publish (NativeFileReference in the consuming app), and guarded scratch simply
+       is not composed there — the caller picks a managed or pinned pool instead. -->
+
+  <ItemGroup>
+    <ProjectReference Include="../Lumoin.Base/Lumoin.Base.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Lumoin.Base.Libsodium.Tests" />
+  </ItemGroup>
+
+</Project>
