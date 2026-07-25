@@ -6,23 +6,11 @@ name: Lumoin.Base wasm smoke
 # Node. Its job is to notice, ahead of the family's net11.0 move, when a new .NET 11 preview
 # bumps the Emscripten pin or changes wasm marshalling in a way that breaks the binding.
 
+# Deliberately NOT triggered by push or pull_request while the browser arc is parked: the leg is
+# experimental and must not add noise to package PRs. The weekly schedule still catches Emscripten
+# pin bumps across .NET 11 previews; run manually via workflow_dispatch when touching the binding.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - develop
-    paths:
-      - "src/Lumoin.Base/**"
-      - "src/Lumoin.Base.Libsodium/**"
-      - "test/Lumoin.Base.Libsodium.WasmSmoke/**"
-      - ".github/workflows/wasm-smoke.yml"
-  pull_request:
-    paths:
-      - "src/Lumoin.Base/**"
-      - "src/Lumoin.Base.Libsodium/**"
-      - "test/Lumoin.Base.Libsodium.WasmSmoke/**"
-      - ".github/workflows/wasm-smoke.yml"
   schedule:
     # Weekly: a new .NET 11 preview may bump the pinned Emscripten; this rebuilds the static
     # libsodium at the new pin and re-runs the smoke against it.
