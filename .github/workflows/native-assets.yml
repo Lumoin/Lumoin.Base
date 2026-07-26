@@ -1,0 +1,254 @@
+name: Lumoin.Base libsodium native assets
+
+# Family provenance for native crypto binaries: every leg downloads the pinned upstream libsodium
+# release tarball, verifies it against the pinned SHA-256 recorded below, builds it on a
+# GitHub-hosted runner, and proves the artifact by running the full Lumoin.Base.Libsodium test
+# suite against it (the suite skips as inconclusive without a working library, so the gate
+# requires "skipped: 0" - a binary that fails to load cannot pass silently). The pack job then
+# assembles one Lumoin.Base.Libsodium.NativeAssets package, versioned after the libsodium source,
+# and the publish job pushes it to NuGet.org via trusted publishing when dispatched with
+# publish: true.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the packed NativeAssets package to NuGet.org
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_NOLOGO: true
+  NUGET_XMLDOC_MODE: skip
+  NUGET_FEED: https://api.nuget.org/v3/index.json
+
+  # The pinned upstream source: bump tag, version, and hash together, deliberately.
+  LIBSODIUM_TAG: 1.0.22-RELEASE
+  LIBSODIUM_VERSION: 1.0.22
+  LIBSODIUM_TARBALL_SHA256: adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349
+
+  COMMON_ALLOWED_ENDPOINTS: >
+    aka.ms:443
+    api.github.com:443
+    *.actions.githubusercontent.com:443
+    api.nuget.org:443
+    www.nuget.org:443
+    builds.dotnet.microsoft.com:443
+    ci.dot.net:443
+    github.com:443
+    objects.githubusercontent.com:443
+    release-assets.githubusercontent.com:443
+
+jobs:
+  build:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, rid: win-x64 }
+          - { os: ubuntu-latest, rid: linux-x64 }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64 }
+          - { os: macos-13, rid: osx-x64 }
+          - { os: macos-latest, rid: osx-arm64 }
+    steps:
+    - name: Harden Runner
+      if: ${{ runner.os == 'Linux' }}
+      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+      with:
+        disable-sudo: true
+        egress-policy: block
+        allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
+
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+    - name: Set up .NET SDK
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      with:
+        cache: true
+        cache-dependency-path: '**/packages.lock.json'
+        global-json-file: global.json
+
+    - name: Download and verify the pinned libsodium source (Unix)
+      if: ${{ runner.os != 'Windows' }}
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/libsodium.tar.gz" "https://github.com/jedisct1/libsodium/releases/download/${LIBSODIUM_TAG}/libsodium-${LIBSODIUM_VERSION}.tar.gz"
+        echo "${LIBSODIUM_TARBALL_SHA256}  $RUNNER_TEMP/libsodium.tar.gz" | shasum -a 256 -c -
+        mkdir -p "$RUNNER_TEMP/libsodium-src"
+        tar -xzf "$RUNNER_TEMP/libsodium.tar.gz" -C "$RUNNER_TEMP/libsodium-src" --strip-components=1
+
+    - name: Download and verify the pinned libsodium source (Windows)
+      if: ${{ runner.os == 'Windows' }}
+      shell: pwsh
+      run: |
+        $tarball = Join-Path $env:RUNNER_TEMP 'libsodium.tar.gz'
+        Invoke-WebRequest -Uri "https://github.com/jedisct1/libsodium/releases/download/$env:LIBSODIUM_TAG/libsodium-$env:LIBSODIUM_VERSION.tar.gz" -OutFile $tarball
+        $hash = (Get-FileHash $tarball -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($hash -ne $env:LIBSODIUM_TARBALL_SHA256.ToLowerInvariant()) { throw "SHA-256 mismatch: $hash" }
+        $src = Join-Path $env:RUNNER_TEMP 'libsodium-src'
+        New-Item -ItemType Directory -Force $src | Out-Null
+        tar -xzf $tarball -C $src --strip-components=1
+
+    - name: Build libsodium (Unix)
+      if: ${{ runner.os != 'Windows' }}
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP/libsodium-src"
+        ./configure --prefix="$RUNNER_TEMP/libsodium-out"
+        make -j"$(getconf _NPROCESSORS_ONLN)"
+        make install
+        mkdir -p "$RUNNER_TEMP/staging/${{ matrix.rid }}/native"
+        # Ship the real shared object under the flat name the .NET loader probes for module
+        # "libsodium"; the versioned file is resolved through the symlink make install created.
+        if [ "${{ runner.os }}" = "Linux" ]; then
+          cp "$(readlink -f "$RUNNER_TEMP/libsodium-out/lib/libsodium.so")" "$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.so"
+        else
+          cp "$(readlink -f "$RUNNER_TEMP/libsodium-out/lib/libsodium.dylib")" "$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.dylib"
+        fi
+
+    - name: Build libsodium (Windows, MSVC)
+      if: ${{ runner.os == 'Windows' }}
+      shell: pwsh
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+        if (-not $msbuild) { throw 'MSBuild not found.' }
+        $src = Join-Path $env:RUNNER_TEMP 'libsodium-src'
+        & $msbuild (Join-Path $src 'builds\msvc\vs2022\libsodium.sln') /m /p:Configuration=DynRelease /p:Platform=x64 /v:minimal
+        if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with $LASTEXITCODE" }
+        $dll = Get-ChildItem (Join-Path $src 'bin') -Recurse -Filter libsodium.dll | Where-Object { $_.DirectoryName -match 'dynamic' } | Select-Object -First 1
+        if (-not $dll) { throw 'libsodium.dll not produced.' }
+        $stage = Join-Path $env:RUNNER_TEMP "staging\${{ matrix.rid }}\native"
+        New-Item -ItemType Directory -Force $stage | Out-Null
+        Copy-Item $dll.FullName (Join-Path $stage 'libsodium.dll')
+
+    - name: Prove the artifact with the Lumoin.Base.Libsodium test suite (Unix)
+      if: ${{ runner.os != 'Windows' }}
+      run: |
+        set -euo pipefail
+        dotnet build test/Lumoin.Base.Libsodium.Tests/Lumoin.Base.Libsodium.Tests.csproj -c Release
+        ext=so; [ "${{ runner.os }}" = "macOS" ] && ext=dylib
+        export LUMOIN_SODIUM_LIBRARY="$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.$ext"
+        out="$(./test/Lumoin.Base.Libsodium.Tests/bin/Release/net10.0/Lumoin.Base.Libsodium.Tests)"
+        echo "$out"
+        echo "$out" | grep -q "failed: 0" || { echo "Test failures against the built binary."; exit 1; }
+        echo "$out" | grep -q "skipped: 0" || { echo "Suite skipped tests: the built binary did not load."; exit 1; }
+
+    - name: Prove the artifact with the Lumoin.Base.Libsodium test suite (Windows)
+      if: ${{ runner.os == 'Windows' }}
+      shell: pwsh
+      run: |
+        dotnet build test/Lumoin.Base.Libsodium.Tests/Lumoin.Base.Libsodium.Tests.csproj -c Release
+        if ($LASTEXITCODE -ne 0) { throw 'Test build failed.' }
+        $env:LUMOIN_SODIUM_LIBRARY = Join-Path $env:RUNNER_TEMP "staging\${{ matrix.rid }}\native\libsodium.dll"
+        $out = & '.\test\Lumoin.Base.Libsodium.Tests\bin\Release\net10.0\Lumoin.Base.Libsodium.Tests.exe' | Out-String
+        Write-Host $out
+        if ($LASTEXITCODE -ne 0) { throw "Test run failed with $LASTEXITCODE" }
+        if ($out -notmatch 'failed: 0') { throw 'Test failures against the built binary.' }
+        if ($out -notmatch 'skipped: 0') { throw 'Suite skipped tests: the built binary did not load.' }
+
+    - name: Upload staged native asset
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: native-${{ matrix.rid }}
+        path: ${{ runner.temp }}/staging/
+        if-no-files-found: error
+
+  pack:
+    name: Pack Lumoin.Base.Libsodium.NativeAssets
+    needs: [ build ]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Harden Runner
+      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+      with:
+        disable-sudo: true
+        egress-policy: block
+        allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
+
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+    - name: Set up .NET SDK
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      with:
+        cache: true
+        cache-dependency-path: '**/packages.lock.json'
+        global-json-file: global.json
+
+    - name: Download staged native assets
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        pattern: native-*
+        merge-multiple: true
+        path: ./native-staging
+
+    - name: Verify every RID is present
+      run: |
+        set -euo pipefail
+        for f in win-x64/native/libsodium.dll linux-x64/native/libsodium.so linux-arm64/native/libsodium.so osx-x64/native/libsodium.dylib osx-arm64/native/libsodium.dylib; do
+          test -f "./native-staging/$f" || { echo "Missing $f"; exit 1; }
+        done
+        find ./native-staging -type f -exec sha256sum {} \;
+
+    - name: Pack
+      run: |
+        dotnet pack --verbosity normal \
+          --configuration Release \
+          --output nupkgs \
+          --property:PackageVersion="$LIBSODIUM_VERSION" \
+          --property:NativeAssetsStagingDirectory="$PWD/native-staging" \
+          src/Lumoin.Base.Libsodium.NativeAssets/Lumoin.Base.Libsodium.NativeAssets.csproj
+
+    - name: Upload NuGet package
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: nupkg-native-assets
+        path: ./nupkgs/*.*
+        if-no-files-found: error
+
+  publish:
+    name: Publish to NuGet.org
+    needs: [ pack ]
+    if: ${{ inputs.publish && github.repository_owner == 'lumoin' }}
+    permissions:
+      # id-token is required for NuGet trusted publishing (OIDC).
+      id-token: write
+    runs-on: ubuntu-latest
+    # Bind publishing to the "Release" deployment environment so the OIDC token carries the
+    # environment claim and deployments are recorded against it, same as main.yml's deploy job.
+    environment: Release
+    steps:
+    - name: Harden Runner
+      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+      with:
+        disable-sudo: true
+        egress-policy: block
+        allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
+
+    - name: Download NuGet package
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        pattern: nupkg-native-assets
+        merge-multiple: true
+        path: ./nupkgs
+
+    - name: NuGet trusted publishing login (OIDC)
+      id: nuget_login
+      uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841
+      with:
+        user: ${{ secrets.NUGET_USER }}
+
+    - name: Push package to NuGet.org
+      run: |
+        for file in ./nupkgs/*.nupkg; do
+          dotnet nuget push "$file" --source "$NUGET_FEED" --api-key "${{ steps.nuget_login.outputs.NUGET_API_KEY }}" --skip-duplicate
+        done

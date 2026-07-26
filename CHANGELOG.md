@@ -94,6 +94,14 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   silent fallback to unlocked memory. The OS provides no guard pages or canary here; pair with
   `NativeRentMode.ProtectedSlab` for software-canary overrun detection on top of the locked
   region. `MemoryProtectionBacking.IsSupported` reports platform support.
+- New package `Lumoin.Base.Libsodium`: a raw libsodium crypto binding for the family - Ed25519
+  seed-keypair generation, detached signing and verification, Ed25519-to-X25519 key conversion,
+  X25519 scalar multiplication, XChaCha20-Poly1305 authenticated encryption, and the ML-KEM-768
+  (FIPS 203) and X-Wing hybrid post-quantum KEMs. Secret-key scratch memory is composed by the caller as a
+  `MemoryPool<byte>` (guarded native, locked, pinned, or managed backing), so the binding depends
+  only on `Lumoin.Base` and carries no native assets of its own; the libsodium native library
+  resolves at runtime on desktop and server targets and is statically linked at publish on
+  browser-wasm.
 
 ### Changed
 

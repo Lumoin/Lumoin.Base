@@ -34,12 +34,14 @@ env:
   # grows, add further project names here.
   LIBRARY_PROJECTS: >
     Lumoin.Base
+    Lumoin.Base.Libsodium
     Lumoin.Base.MemoryProtection
     Lumoin.Base.Sodium
 
   # Test projects — each compiled executable is an input to dotnet-coverage in its
   # own test step below.
   BASE_TESTS: Lumoin.Base.Tests
+  LIBSODIUM_TESTS: Lumoin.Base.Libsodium.Tests
   MEMORY_PROTECTION_TESTS: Lumoin.Base.MemoryProtection.Tests
   SODIUM_TESTS: Lumoin.Base.Sodium.Tests
 
@@ -163,6 +165,14 @@ jobs:
     - name: Test
       run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.BASE_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.BASE_TESTS }}' --report-trx --report-trx-filename testresults.trx --results-directory '${{ github.workspace }}/reports'
       timeout-minutes: 20
+
+    # The runners carry no libsodium native library and the family ships its own (no
+    # third-party binaries), so the libsodium-dependent tests assert inconclusive (skipped)
+    # here while the availability-independent tests still execute. The fork-built
+    # native asset packages light the skipped tests up when they land.
+    - name: Test (Libsodium)
+      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage-libsodium.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.LIBSODIUM_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.LIBSODIUM_TESTS }}' --report-trx --report-trx-filename testresults-libsodium.trx --results-directory '${{ github.workspace }}/reports'
+      timeout-minutes: 10
 
     # MemoryProtection P/Invokes only kernel32/libc, which every runner ships, so this
     # suite runs for real on all four legs — VirtualLock on Windows, mlock elsewhere.
