@@ -2,8 +2,7 @@
 // binding is never a third-party repackaging (libsodium NuGet, NSec, LibSodium.Net). Until
 // family-built native asset packages exist, LUMOIN_SODIUM_LIBRARY is the interim dev-loop knob — it
 // points at a libsodium built locally from pinned upstream source, and nothing produced by that local
-// build is ever published. The knob is shared with Lumoin.Base.Sodium.Tests so one locally built
-// library serves both suites.
+// build is ever published.
 
 using System.Reflection;
 using System.Runtime.InteropServices;

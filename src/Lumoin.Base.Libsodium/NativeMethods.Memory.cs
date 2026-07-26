@@ -1,9 +1,10 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Lumoin.Base.Sodium;
+namespace Lumoin.Base.Libsodium;
 
 /// <summary>
+/// These are the guarded-memory entry points behind <see cref="SodiumBacking"/>.
 /// The raw libsodium entry points behind <see cref="SodiumBacking"/>. The module name
 /// <c>libsodium</c> resolves per platform to <c>libsodium.dll</c>, <c>libsodium.so</c> or
 /// <c>libsodium.dylib</c> through the standard .NET native library probing (application directory,
@@ -20,26 +21,6 @@ namespace Lumoin.Base.Sodium;
 /// </remarks>
 internal static unsafe partial class NativeMethods
 {
-    /// <summary>
-    /// The libsodium module name handed to the .NET native library loader.
-    /// </summary>
-    private const string LibraryName = "libsodium";
-
-
-    /// <summary>
-    /// Initializes libsodium. Thread-safe and idempotent; every other entry point requires a
-    /// successful initialization first.
-    /// </summary>
-    /// <returns>
-    /// <c>0</c> on first successful initialization, <c>1</c> when already initialized,
-    /// <c>-1</c> on failure.
-    /// </returns>
-    [LibraryImport(LibraryName, EntryPoint = "sodium_init")]
-    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
-    internal static partial int Init();
-
-
     /// <summary>
     /// Allocates <paramref name="size"/> bytes of guarded memory: the page-rounded region is
     /// bracketed by no-access guard pages (an overflow past the end faults immediately, as does an

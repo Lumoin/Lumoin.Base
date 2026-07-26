@@ -1,11 +1,11 @@
 using CsCheck;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Lumoin.Base.Sodium.Tests;
+namespace Lumoin.Base.Libsodium.Tests;
 
 /// <summary>
 /// Property-based tests using CsCheck for <see cref="SodiumBacking"/>, gated behind
-/// <see cref="SodiumTestEnvironment.RequireSodium"/> since every case exercises the real native
+/// <see cref="LibsodiumTestEnvironment.RequireSodium"/> since every case exercises the real native
 /// library.
 /// </summary>
 [TestClass]
@@ -17,7 +17,7 @@ public sealed class SodiumBackingCsCheckTests
     [TestMethod]
     public void PropertyAllocateReturnsExactSizeWithRoundTrip()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         //Locked memory is a process-wide quota; sample sequentially so parallel samples cannot exhaust it.
         Gen.Int[1, 8192].Sample(size =>
@@ -37,7 +37,7 @@ public sealed class SodiumBackingCsCheckTests
     [TestMethod]
     public void PropertyPoolNativeRentRoundTripsForAllSizes()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         //A fresh sodium-wired strict pool per sample keeps each case independent of the others.
         //Locked memory is a process-wide quota; sample sequentially so parallel samples cannot

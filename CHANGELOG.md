@@ -64,14 +64,15 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   by design (it relies on GC liveness, so no `Native`/`Pinned` backing). Optional OpenTelemetry metrics via
   `Utf8StringInternerMetrics` (intern, hit, and rotation counters plus a live-count gauge), and an optional maximum
   value length that returns oversized values uncached so no single value can bloat the resident set.
-- New package `Lumoin.Base.Sodium`: the libsodium implementation of the `NativeBackingAllocator`
-  seam. Wiring `SodiumBacking.Allocate` into a `BaseMemoryPool` serves `AllocationKind.Native`
-  rents as per-rent isolated `sodium_malloc` guarded allocations — canary, guard pages, best-effort
-  memory locking, and zero on free — with `sodium_memzero` defense-in-depth and a finalizer
-  backstop on the owner. The managed binding is RID-agnostic and carries no native assets; the
-  libsodium native library is resolved at runtime (family-built native asset packages to follow),
-  and `SodiumBacking.IsAvailable` reports whether it loaded so hosts wire the backing only where
-  it exists.
+- Guarded-memory backing `SodiumBacking` (in `Lumoin.Base.Libsodium`): the libsodium
+  implementation of the `NativeBackingAllocator` seam. Wiring `SodiumBacking.Allocate` into a
+  `BaseMemoryPool` serves `AllocationKind.Native` rents as per-rent isolated `sodium_malloc`
+  guarded allocations — canary, guard pages, best-effort memory locking, and zero on free — with
+  `sodium_memzero` defense-in-depth and a finalizer backstop on the owner.
+  `SodiumBacking.IsAvailable` reports whether the native library loaded so hosts wire the backing
+  only where it exists. Not available on browser-wasm and marked `[UnsupportedOSPlatform]`
+  accordingly. Briefly shipped as the separate package `Lumoin.Base.Sodium` (last release 0.0.7,
+  now retired).
 - Protected-slab native tier: `BaseMemoryPool` gains a pool-level `NativeRentMode`
   (`PerRentIsolated`, the default, or `ProtectedSlab`). In protected-slab mode injected backing
   regions are allocated on demand per buffer size, each subdivided into exact-size segments
@@ -94,17 +95,22 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   silent fallback to unlocked memory. The OS provides no guard pages or canary here; pair with
   `NativeRentMode.ProtectedSlab` for software-canary overrun detection on top of the locked
   region. `MemoryProtectionBacking.IsSupported` reports platform support.
-- New package `Lumoin.Base.Libsodium`: a raw libsodium crypto binding for the family - Ed25519
-  seed-keypair generation, detached signing and verification, Ed25519-to-X25519 key conversion,
-  X25519 scalar multiplication, XChaCha20-Poly1305 authenticated encryption, and the ML-KEM-768
-  (FIPS 203) and X-Wing hybrid post-quantum KEMs. Secret-key scratch memory is composed by the caller as a
-  `MemoryPool<byte>` (guarded native, locked, pinned, or managed backing), so the binding depends
-  only on `Lumoin.Base` and carries no native assets of its own; the libsodium native library
-  resolves at runtime on desktop and server targets and is statically linked at publish on
-  browser-wasm.
+- New package `Lumoin.Base.Libsodium`, the family's one libsodium package: a raw crypto binding -
+  Ed25519 seed-keypair generation, detached signing and verification, Ed25519-to-X25519 key
+  conversion, X25519 scalar multiplication, XChaCha20-Poly1305 authenticated encryption, and the
+  ML-KEM-768 (FIPS 203) and X-Wing hybrid post-quantum KEMs, with secret-key scratch memory
+  composed by the caller as a `MemoryPool<byte>` (guarded native, locked, pinned, or managed
+  backing) - plus the `SodiumBacking` guarded-memory seam implementation described above. Depends
+  only on `Lumoin.Base`. The libsodium 1.0.22 native library ships inside the package
+  (win-x64, linux-x64, linux-arm64, osx-x64, osx-arm64), built by the family from the pinned,
+  checksum-verified upstream release source, so the package works as-is from NuGet; on
+  browser-wasm the same binding is statically linked at publish instead.
 
 ### Changed
 
+- Package `Lumoin.Base.Sodium` is retired: its guarded-memory backing (`SodiumBacking`,
+  namespace now `Lumoin.Base.Libsodium`) ships in `Lumoin.Base.Libsodium`. 0.0.7 remains the
+  last release of the retired id.
 - `SensitiveMemory`: documented the wipe's threat model — exposure it reduces versus what it cannot defend, and
   that the wipe is only fully reliable on non-relocatable (`Pinned`/`Native`) backing.
 - `SensitiveMemory`: `Dispose` now stops and stamps an optional OpenTelemetry lifetime `Activity`, and skips

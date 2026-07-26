@@ -2,7 +2,6 @@ $projects = @(
     'Lumoin.Base'
     'Lumoin.Base.Libsodium'
     'Lumoin.Base.MemoryProtection'
-    'Lumoin.Base.Sodium'
 )
 
 $outputDir = './generated-nugets'

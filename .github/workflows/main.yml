@@ -36,14 +36,19 @@ env:
     Lumoin.Base
     Lumoin.Base.Libsodium
     Lumoin.Base.MemoryProtection
-    Lumoin.Base.Sodium
 
   # Test projects — each compiled executable is an input to dotnet-coverage in its
   # own test step below.
   BASE_TESTS: Lumoin.Base.Tests
   LIBSODIUM_TESTS: Lumoin.Base.Libsodium.Tests
   MEMORY_PROTECTION_TESTS: Lumoin.Base.MemoryProtection.Tests
-  SODIUM_TESTS: Lumoin.Base.Sodium.Tests
+
+  # The pinned upstream libsodium source the natives job builds from: bump tag, version,
+  # and hash together, deliberately. The binaries ship inside Lumoin.Base.Libsodium and
+  # Lumoin.Base.Sodium (runtimes/<rid>/native) so both work as-is from NuGet.
+  LIBSODIUM_TAG: 1.0.22-RELEASE
+  LIBSODIUM_VERSION: 1.0.22
+  LIBSODIUM_TARBALL_SHA256: adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349
 
   # Endpoints harden-runner is permitted to reach: NuGet feed access, dotnet tool
   # downloads, .NET SDK installation, Sigstore attestation, certificate revocation,
@@ -59,6 +64,8 @@ env:
     ci.dot.net:443
     pkgs.dev.azure.com:443
     github.com:443
+    objects.githubusercontent.com:443
+    release-assets.githubusercontent.com:443
     nuget.pkg.github.com:443
     fulcio.sigstore.dev:443
     rekor.sigstore.dev:443
@@ -166,10 +173,11 @@ jobs:
       run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.BASE_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.BASE_TESTS }}' --report-trx --report-trx-filename testresults.trx --results-directory '${{ github.workspace }}/reports'
       timeout-minutes: 20
 
-    # The runners carry no libsodium native library and the family ships its own (no
-    # third-party binaries), so the libsodium-dependent tests assert inconclusive (skipped)
-    # here while the availability-independent tests still execute. The fork-built
-    # native asset packages light the skipped tests up when they land.
+    # Test hosts consume the library as a project reference, which does not carry the packed
+    # runtimes/ binaries, and the runners ship no libsodium of their own - so the
+    # libsodium-dependent tests assert inconclusive (skipped) here while the
+    # availability-independent tests still execute. The natives job proves every packed binary
+    # against this same suite with a hard "skipped: 0" gate.
     - name: Test (Libsodium)
       run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage-libsodium.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.LIBSODIUM_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.LIBSODIUM_TESTS }}' --report-trx --report-trx-filename testresults-libsodium.trx --results-directory '${{ github.workspace }}/reports'
       timeout-minutes: 10
@@ -180,13 +188,6 @@ jobs:
       run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage-memoryprotection.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.MEMORY_PROTECTION_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.MEMORY_PROTECTION_TESTS }}' --report-trx --report-trx-filename testresults-memoryprotection.trx --results-directory '${{ github.workspace }}/reports'
       timeout-minutes: 10
 
-    # The runners carry no libsodium native library and the family ships its own (no
-    # third-party binaries), so the sodium-dependent tests assert inconclusive (skipped)
-    # here while the availability-independent tests still execute. The fork-built
-    # native asset packages light the skipped tests up when they land.
-    - name: Test (Sodium)
-      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage-sodium.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.SODIUM_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.SODIUM_TESTS }}' --report-trx --report-trx-filename testresults-sodium.trx --results-directory '${{ github.workspace }}/reports'
-      timeout-minutes: 10
 
     - name: Create test summary
       if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' }}
@@ -194,11 +195,214 @@ jobs:
       with:
         trx_files: '${{ github.workspace }}/reports/**/*.trx'
 
-    # Pack runs on ubuntu-latest only. The other legs prove the code builds and tests
-    # pass on x64 Windows, macOS, and ARM64 Linux — packing is canonical, one package
-    # per release rather than one per matrix leg.
+  # Builds the libsodium native binaries that ship inside Lumoin.Base.Libsodium and
+  # Lumoin.Base.Sodium. Every leg downloads the pinned upstream release tarball, verifies it
+  # against the pinned SHA-256, builds it on a GitHub-hosted runner, and proves the binary by
+  # running the Lumoin.Base.Libsodium test suite against it with a hard "skipped: 0" gate: the
+  # suite skips as inconclusive without a working library, so a binary that fails to load
+  # cannot pass silently.
+  natives:
+    name: libsodium ${{ matrix.rid }}
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, rid: win-x64 }
+          - { os: ubuntu-latest, rid: linux-x64 }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64 }
+          - { os: macos-15-intel, rid: osx-x64 }
+          - { os: macos-latest, rid: osx-arm64 }
+    steps:
+    - name: Harden Runner
+      if: ${{ runner.os == 'Linux' }}
+      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+      with:
+        disable-sudo: true
+        egress-policy: block
+        allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
+
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+    - name: Set up .NET SDK
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      with:
+        cache: true
+        cache-dependency-path: '**/packages.lock.json'
+        global-json-file: global.json
+
+    - name: Install dependencies
+      run: dotnet restore --locked-mode
+
+    - name: Download and verify the pinned libsodium source (Unix)
+      if: ${{ runner.os != 'Windows' }}
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/libsodium.tar.gz" "https://github.com/jedisct1/libsodium/releases/download/${LIBSODIUM_TAG}/libsodium-${LIBSODIUM_VERSION}.tar.gz"
+        echo "${LIBSODIUM_TARBALL_SHA256}  $RUNNER_TEMP/libsodium.tar.gz" | shasum -a 256 -c -
+        mkdir -p "$RUNNER_TEMP/libsodium-src"
+        tar -xzf "$RUNNER_TEMP/libsodium.tar.gz" -C "$RUNNER_TEMP/libsodium-src" --strip-components=1
+
+    - name: Download and verify the pinned libsodium source (Windows)
+      if: ${{ runner.os == 'Windows' }}
+      shell: pwsh
+      run: |
+        $tarball = Join-Path $env:RUNNER_TEMP 'libsodium.tar.gz'
+        Invoke-WebRequest -Uri "https://github.com/jedisct1/libsodium/releases/download/$env:LIBSODIUM_TAG/libsodium-$env:LIBSODIUM_VERSION.tar.gz" -OutFile $tarball
+        $hash = (Get-FileHash $tarball -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($hash -ne $env:LIBSODIUM_TARBALL_SHA256.ToLowerInvariant()) { throw "SHA-256 mismatch: $hash" }
+        $src = Join-Path $env:RUNNER_TEMP 'libsodium-src'
+        New-Item -ItemType Directory -Force $src | Out-Null
+        tar -xzf $tarball -C $src --strip-components=1
+
+    - name: Build libsodium (Unix)
+      if: ${{ runner.os != 'Windows' }}
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP/libsodium-src"
+        ./configure --prefix="$RUNNER_TEMP/libsodium-out"
+        make -j"$(getconf _NPROCESSORS_ONLN)"
+        make install
+        mkdir -p "$RUNNER_TEMP/staging/${{ matrix.rid }}/native"
+        # Ship the real shared object under the flat name the .NET loader probes for module
+        # "libsodium"; the versioned file is resolved through the symlink make install created.
+        if [ "${{ runner.os }}" = "Linux" ]; then
+          cp "$(readlink -f "$RUNNER_TEMP/libsodium-out/lib/libsodium.so")" "$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.so"
+        else
+          cp "$(readlink -f "$RUNNER_TEMP/libsodium-out/lib/libsodium.dylib")" "$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.dylib"
+        fi
+
+    - name: Build libsodium (Windows, MSVC)
+      if: ${{ runner.os == 'Windows' }}
+      shell: pwsh
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+        if (-not $msbuild) { throw 'MSBuild not found.' }
+        $src = Join-Path $env:RUNNER_TEMP 'libsodium-src'
+        & $msbuild (Join-Path $src 'builds\msvc\vs2022\libsodium.sln') /m /p:Configuration=DynRelease /p:Platform=x64 /v:minimal
+        if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with $LASTEXITCODE" }
+        $dll = Get-ChildItem (Join-Path $src 'bin') -Recurse -Filter libsodium.dll | Where-Object { $_.DirectoryName -match 'dynamic' } | Select-Object -First 1
+        if (-not $dll) { throw 'libsodium.dll not produced.' }
+        $stage = Join-Path $env:RUNNER_TEMP "staging\${{ matrix.rid }}\native"
+        New-Item -ItemType Directory -Force $stage | Out-Null
+        Copy-Item $dll.FullName (Join-Path $stage 'libsodium.dll')
+
+    - name: Prove the binary with the Lumoin.Base.Libsodium test suite (Unix)
+      if: ${{ runner.os != 'Windows' }}
+      run: |
+        set -euo pipefail
+        dotnet build test/Lumoin.Base.Libsodium.Tests/Lumoin.Base.Libsodium.Tests.csproj --configuration "$BUILD_CONFIGURATION" --no-restore
+        ext=so; [ "${{ runner.os }}" = "macOS" ] && ext=dylib
+        export LUMOIN_SODIUM_LIBRARY="$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.$ext"
+        out="$("./test/Lumoin.Base.Libsodium.Tests/bin/$BUILD_CONFIGURATION/net10.0/Lumoin.Base.Libsodium.Tests")"
+        echo "$out"
+        echo "$out" | grep -q "failed: 0" || { echo "Test failures against the built binary."; exit 1; }
+        echo "$out" | grep -q "skipped: 0" || { echo "Suite skipped tests: the built binary did not load."; exit 1; }
+      timeout-minutes: 10
+
+    - name: Prove the binary with the Lumoin.Base.Libsodium test suite (Windows)
+      if: ${{ runner.os == 'Windows' }}
+      shell: pwsh
+      run: |
+        dotnet build test/Lumoin.Base.Libsodium.Tests/Lumoin.Base.Libsodium.Tests.csproj --configuration $env:BUILD_CONFIGURATION --no-restore
+        if ($LASTEXITCODE -ne 0) { throw 'Test build failed.' }
+        $env:LUMOIN_SODIUM_LIBRARY = Join-Path $env:RUNNER_TEMP "staging\win-x64\native\libsodium.dll"
+        $out = & ".\test\Lumoin.Base.Libsodium.Tests\bin\$env:BUILD_CONFIGURATION\net10.0\Lumoin.Base.Libsodium.Tests.exe" | Out-String
+        Write-Host $out
+        if ($LASTEXITCODE -ne 0) { throw "Test run failed with $LASTEXITCODE" }
+        if ($out -notmatch 'failed: 0') { throw 'Test failures against the built binary.' }
+        if ($out -notmatch 'skipped: 0') { throw 'Suite skipped tests: the built binary did not load.' }
+      timeout-minutes: 10
+
+    - name: Upload staged native binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: native-${{ matrix.rid }}
+        path: ${{ runner.temp }}/staging/
+        if-no-files-found: error
+
+  # Packing is canonical: one package per release, produced on one runner from the solution
+  # build plus the natives artifacts, so every packed Lumoin.Base.Libsodium and
+  # Lumoin.Base.Sodium carries the family-built libsodium binaries and works as-is from NuGet.
+  pack:
+    name: Pack library NuGet packages
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    needs: [ build, natives ]
+    if: ${{ github.repository_owner == 'lumoin' }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Harden Runner
+      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+      with:
+        disable-sudo: true
+        egress-policy: block
+        allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
+
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        fetch-depth: 0
+        fetch-tags: true
+
+    - name: Set up .NET SDK
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      with:
+        cache: true
+        cache-dependency-path: '**/packages.lock.json'
+        global-json-file: global.json
+
+    - name: Install dependencies
+      run: dotnet restore --locked-mode
+
+    # Compute the package version with the same rules as the build legs (see the comment there).
+    - name: Set NuGet package and suffix version
+      run: |
+        latestTag=$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.1)
+        if [[ $GITHUB_EVENT_NAME == 'release' ]]; then
+          arrTag=(${GITHUB_REF//\// })
+          VERSION="${arrTag[2]}"
+          VERSION="${VERSION//v}"
+          echo "PACKAGE_VERSION=${VERSION}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "TAG_VERSION=${VERSION}" >> "$GITHUB_ENV"
+        elif [[ $GITHUB_REF == 'refs/heads/develop' ]]; then
+          echo "PACKAGE_VERSION=${latestTag//v}-develop.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "VERSION=${latestTag//v}-develop.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "TAG_VERSION=${latestTag//v}" >> "$GITHUB_ENV"
+        else
+          echo "PACKAGE_VERSION=${latestTag//v}-build.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "VERSION=${latestTag//v}-build.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "TAG_VERSION=${latestTag//v}" >> "$GITHUB_ENV"
+        fi
+      shell: bash
+
+    - name: Build
+      run: dotnet build Lumoin.Base.slnx --tl --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore --property:ContinuousIntegrationBuild=true --property:Version=${{ env.VERSION }} --property:InformationalVersion=${{ env.PACKAGE_VERSION }} --property:AssemblyVersion=${{ env.TAG_VERSION }} --property:FileVersion=${{ env.TAG_VERSION }}
+      timeout-minutes: 15
+
+    - name: Download native binaries
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        pattern: native-*
+        merge-multiple: true
+        path: ./native-staging
+
+    - name: Verify every native binary is present
+      run: |
+        set -euo pipefail
+        for f in win-x64/native/libsodium.dll linux-x64/native/libsodium.so linux-arm64/native/libsodium.so osx-x64/native/libsodium.dylib osx-arm64/native/libsodium.dylib; do
+          test -f "./native-staging/$f" || { echo "Missing $f"; exit 1; }
+        done
+        find ./native-staging -type f -exec sha256sum {} \;
+
     - name: Pack library NuGet packages
-      if: ${{ matrix.os == 'ubuntu-latest' && github.repository_owner == 'lumoin' }}
       run: |
         for project in $LIBRARY_PROJECTS; do
           path="src/$project/$project.csproj"
@@ -208,6 +412,7 @@ jobs:
             --no-build \
             --output nupkgs \
             --property:PackageVersion="${PACKAGE_VERSION%%+*}" \
+            --property:NativeAssetsStagingDirectory="$PWD/native-staging" \
             "$path"
         done
 
@@ -216,13 +421,13 @@ jobs:
     # current plan. Gated on repository visibility so it is skipped while private and
     # turns on automatically once the repository is made public; no edit needed then.
     - name: Generate artifact attestation
-      if: ${{ matrix.os == 'ubuntu-latest' && github.repository_owner == 'lumoin' && github.actor != 'dependabot[bot]' && github.event.repository.private == false }}
+      if: ${{ github.actor != 'dependabot[bot]' && github.event.repository.private == false }}
       uses: lumoin/trusted-devsecops/.github/actions/sign-artifact@bd2b7f91e73d758f3126562d6a569fc0f31814ee
       with:
         subject-path: './nupkgs/*.nupkg'
 
     - name: Upload library NuGet packages
-      if: ${{ matrix.os == 'ubuntu-latest' && github.repository_owner == 'lumoin' && github.actor != 'dependabot[bot]' }}
+      if: ${{ github.actor != 'dependabot[bot]' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: nupkg-libraries
@@ -235,7 +440,7 @@ jobs:
     name: Create and upload Lumoin.Base pre-release packages to GitHub
     permissions:
       packages: write
-    needs: [ build ]
+    needs: [ pack ]
     if: ${{ github.ref == 'refs/heads/develop' && github.repository_owner == 'lumoin' }}
     runs-on: ubuntu-latest
     steps:
@@ -265,7 +470,7 @@ jobs:
       packages: write
       # id-token is required for NuGet trusted publishing (OIDC).
       id-token: write
-    needs: [ build ]
+    needs: [ pack ]
     if: ${{ github.event_name == 'release' && github.repository_owner == 'lumoin' }}
     runs-on: ubuntu-latest
     # Bind publishing to the "Release" deployment environment so the OIDC token carries the

@@ -5,10 +5,16 @@
 Bedrock NuGet packages for the Lumoin family (Verifiable, Veritas, Verisync, Veridical, Concordia,
 Sopia, …). `Lumoin.Base` is the dependency-free leaf: `BaseMemoryPool` (an exact-size,
 zero-on-return `MemoryPool<byte>` with `AllocationKind` tiers `Managed` / `Pinned` / `Native` and
-OpenTelemetry metrics/tracing) and `Tag` (immutable, type-keyed metadata). `Lumoin.Base.Sodium` is
-the non-browser libsodium binding implementing the `NativeBackingAllocator` seam
-(`SodiumBacking.Allocate` → per-rent `sodium_malloc` guarded allocations; RID-agnostic, no native
-assets — the native library resolves at runtime). `Lumoin.Base.MemoryProtection` is the same seam
+OpenTelemetry metrics/tracing) and `Tag` (immutable, type-keyed metadata). `Lumoin.Base.Libsodium`
+is THE libsodium package: the raw crypto binding (Ed25519, X25519, Ed25519↔X25519 conversion,
+XChaCha20-Poly1305 AEAD, ML-KEM-768 and X-Wing KEMs; browser-capable, caller-composed
+`MemoryPool<byte>` scratch) plus the guarded-memory `NativeBackingAllocator` implementation
+(`SodiumBacking.Allocate` → per-rent `sodium_malloc` guarded allocations, marked
+`[UnsupportedOSPlatform("browser")]`), with the libsodium 1.0.22 native binaries shipped INSIDE
+the package (`runtimes/<rid>/native`, built by main.yml's `natives` job from the pinned,
+checksum-verified upstream tarball; statically linked at publish on browser-wasm instead). The
+former `Lumoin.Base.Sodium` package is retired at 0.0.7 — its backing moved in here.
+`Lumoin.Base.MemoryProtection` is the same seam
 via the OS twins (`MemoryProtectionBacking.Allocate` → page-aligned `VirtualLock`/`mlock`+
 `MADV_DONTDUMP` locked allocations; pure P/Invoke into kernel32/libc, zero native assets, strict
 `InsufficientMemoryException` on budget exhaustion — never silent unlocked fallback). Single TFM
@@ -21,9 +27,11 @@ Microsoft.Testing.Platform; the MemoryProtection suite runs for real on every CI
   assets in the leaf assembly. Any platform memory backing (native allocation + mlock/VirtualLock)
   lives in a SEPARATE non-browser assembly and is INJECTED via the `NativeBackingAllocator` seam
   (see the comment in `Directory.Build.props`). Note: `Directory.Build.props` adds
-  `SupportedPlatform browser` to every non-`.Tests` project — a native-backing project under this
-  props file must remove/override that item or its P/Invoke trips CA1416, as
-  `src/Lumoin.Base.Sodium/Lumoin.Base.Sodium.csproj` does.
+  `SupportedPlatform browser` to every non-`.Tests` project. A project whose WHOLE surface is
+  non-browser removes that item (as `src/Lumoin.Base.MemoryProtection` does); a browser-capable
+  project with a non-browser sub-surface keeps it and marks those APIs
+  `[UnsupportedOSPlatform("browser")]` (as `SodiumBacking` in `Lumoin.Base.Libsodium` does).
+  P/Invoke declarations themselves do not trip CA1416.
 - **Load-bearing family contracts:** exact-size `Rent(n)` (returns exactly `n` bytes),
   zero-on-return, double-return protection, `Tag`'s typed `Create/With/Get` and content equality,
   and the pool staying **byte-specialized** (non-generic; go generic only via an owner-coordinated
