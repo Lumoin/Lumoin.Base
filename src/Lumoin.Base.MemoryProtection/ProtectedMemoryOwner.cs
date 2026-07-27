@@ -21,7 +21,7 @@ namespace Lumoin.Base.MemoryProtection;
 /// long. Dispose deterministically.
 /// </para>
 /// <para>
-/// Unlike the guarded tier in <c>Lumoin.Base.Sodium</c>, the operating system provides no guard
+/// Unlike the guarded tier in <c>Lumoin.Base.Libsodium</c>, the operating system provides no guard
 /// pages or canary here — this owner locks and wipes, nothing more. Pair the backing with
 /// <c>NativeRentMode.ProtectedSlab</c> when overrun detection is wanted: the pool's per-segment
 /// software canaries supply it on top of this locked region.

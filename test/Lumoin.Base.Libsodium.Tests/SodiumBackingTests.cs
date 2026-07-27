@@ -4,11 +4,11 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Lumoin.Base.Sodium.Tests;
+namespace Lumoin.Base.Libsodium.Tests;
 
 /// <summary>
 /// Behavioral tests for <see cref="SodiumBacking"/>: argument validation that holds regardless of
-/// whether libsodium is present, and — gated behind <see cref="SodiumTestEnvironment.RequireSodium"/>
+/// whether libsodium is present, and — gated behind <see cref="LibsodiumTestEnvironment.RequireSodium"/>
 /// — allocation, disposal, pinning, and <see cref="BaseMemoryPool"/> integration against the real
 /// native library.
 /// </summary>
@@ -52,7 +52,7 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public void AllocateReturnsExactSizeAndUsableMemory()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         int[] sizes = [1, 16, 32, 64, 128, 256, 512, 1024, 4096, 5000];
 
@@ -71,7 +71,7 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public void AllocationsAreIndependent()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         //Mirrors NativeRentalsAreNotSlabPooled in BaseMemoryPoolTests: two live guarded allocations of
         //the same size must be backed by distinct memory, never aliasing.
@@ -89,7 +89,7 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public void DisposeIsIdempotent()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         var owner = SodiumBacking.Allocate(32);
         owner.Memory.Span.Fill(0xFF);
@@ -104,7 +104,7 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public void MemoryAccessAfterDisposeThrows()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         var owner = SodiumBacking.Allocate(32);
         owner.Dispose();
@@ -121,7 +121,7 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public void PinBoundsAreValidated()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         //Pin computes an address into guarded native memory with plain pointer arithmetic, so its
         //bounds contract is safety-relevant: negative and beyond-length offsets are rejected, and
@@ -141,7 +141,7 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public async Task ConcurrentDisposeFreesExactlyOnce()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         //The owner's contract says concurrent disposals free exactly once (the pointer is claimed
         //by atomic exchange). Race several disposers through a start gate; the signal is the
@@ -168,7 +168,7 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public unsafe void PinnedHandleAddressesTheAllocation()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         using var owner = SodiumBacking.Allocate(64);
         var memory = owner.Memory;
@@ -190,7 +190,7 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public void StrictPoolServesNativeRentsThroughSodium()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         //Strict: no allowNativeDegradation. A sodium-wired backing must serve Native directly rather
         //than degrading, matching WiredNativeBackingServesNativeEvenWhenDegradationDisallowed in
@@ -210,7 +210,7 @@ public sealed class SodiumBackingTests
     [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Analyzer false positive on testRoot.")]
     public void NativeRentEmitsNoDegradationTelemetry()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         //Mirrors DegradedNativeRentReportsEffectiveKindAndEmitsEvent in BaseMemoryPoolTests, but for
         //the non-degraded path: a sodium-wired strict pool serves Native directly, so the Rent activity
@@ -260,7 +260,7 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public void AllocatorDelegateAllocates()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         using var owner = SodiumBacking.Allocator(24);
         Assert.HasCount(24, owner.Memory, "The cached Allocator delegate should behave exactly like Allocate.");
@@ -276,7 +276,7 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public void FinalizerBackstopDoesNotCrash()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         AllocateAndDrop();
 

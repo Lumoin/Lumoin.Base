@@ -2,12 +2,12 @@ using System.Buffers;
 using System.Diagnostics.Metrics;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Lumoin.Base.Sodium.Tests;
+namespace Lumoin.Base.Libsodium.Tests;
 
 /// <summary>
 /// Behavioral tests for the protected-slab <see cref="AllocationKind.Native"/> tier
 /// (<see cref="NativeRentMode.ProtectedSlab"/>) wired to the real libsodium backing, gated behind
-/// <see cref="SodiumTestEnvironment.RequireSodium"/> since every case exercises the native library.
+/// <see cref="LibsodiumTestEnvironment.RequireSodium"/> since every case exercises the native library.
 /// </summary>
 [TestClass]
 public sealed class SodiumProtectedSlabTests
@@ -18,7 +18,7 @@ public sealed class SodiumProtectedSlabTests
     [TestMethod]
     public void SlabModePoolServesManyRentsFromOneGuardedRegion()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         int callCount = 0;
         NativeBackingAllocator countingSodiumBacking = size =>
@@ -67,7 +67,7 @@ public sealed class SodiumProtectedSlabTests
     [TestMethod]
     public void SlabModeRoundTripsAndZeroesOnReuse()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         using var meter = new Meter("Test", "1.0.0");
         using var pool = new BaseMemoryPool(
@@ -92,7 +92,7 @@ public sealed class SodiumProtectedSlabTests
     [TestMethod]
     public void TrimExcessReleasesGuardedRegion()
     {
-        SodiumTestEnvironment.RequireSodium();
+        LibsodiumTestEnvironment.RequireSodium();
 
         using var meter = new Meter("Test", "1.0.0");
         using var pool = new BaseMemoryPool(

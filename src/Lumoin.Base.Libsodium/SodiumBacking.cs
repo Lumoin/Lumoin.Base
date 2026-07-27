@@ -1,6 +1,7 @@
 using System.Buffers;
+using System.Runtime.Versioning;
 
-namespace Lumoin.Base.Sodium;
+namespace Lumoin.Base.Libsodium;
 
 /// <summary>
 /// The libsodium implementation of the <see cref="NativeBackingAllocator"/> seam: wire
@@ -35,6 +36,8 @@ namespace Lumoin.Base.Sodium;
 /// the Native tier per rent for few long-lived secrets rather than slab-pooling it.
 /// </para>
 /// </remarks>
+//Guarded native memory does not exist in the browser sandbox; the crypto surface of this package does.
+[UnsupportedOSPlatform("browser")]
 public static class SodiumBacking
 {
     /// <summary>

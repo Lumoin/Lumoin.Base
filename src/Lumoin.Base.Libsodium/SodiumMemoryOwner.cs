@@ -1,7 +1,8 @@
 using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.Versioning;
 
-namespace Lumoin.Base.Sodium;
+namespace Lumoin.Base.Libsodium;
 
 /// <summary>
 /// Owns one <c>sodium_malloc</c> guarded allocation and exposes it as exact-size
@@ -25,6 +26,8 @@ namespace Lumoin.Base.Sodium;
 /// conditions this owner can translate into exceptions.
 /// </para>
 /// </remarks>
+//Guarded native memory does not exist in the browser sandbox; the crypto surface of this package does.
+[UnsupportedOSPlatform("browser")]
 internal sealed unsafe class SodiumMemoryOwner: MemoryManager<byte>
 {
     /// <summary>

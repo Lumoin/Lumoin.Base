@@ -22,7 +22,7 @@ namespace Lumoin.Base.MemoryProtection;
 /// This package carries no native binaries and no dependencies beyond <c>Lumoin.Base</c>: the
 /// imports target <c>kernel32</c> and <c>libc</c>, which every supported operating system already
 /// ships. That is its role in the family — the locked native tier for consumers that cannot or
-/// do not want to carry the libsodium-backed <c>Lumoin.Base.Sodium</c>.
+/// do not want to carry the libsodium-backed <c>Lumoin.Base.Libsodium</c>.
 /// </para>
 /// <para>
 /// What locking buys and what it does not: locked pages cannot be swapped to disk (and on
