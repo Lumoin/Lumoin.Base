@@ -11,7 +11,9 @@ namespace Lumoin.Base.Libsodium;
 /// override resolution with
 /// <see cref="NativeLibrary.SetDllImportResolver(System.Reflection.Assembly, DllImportResolver)"/>
 /// on this assembly. On browser-wasm the same imports are satisfied by a <c>libsodium.a</c>
-/// statically linked into <c>dotnet.wasm</c> at publish, keyed by this same module name.
+/// statically linked into <c>dotnet.wasm</c> at publish, keyed by this same module name. The
+/// <c>net10.0-ios</c>/<c>net10.0-maccatalyst</c> builds of this assembly use <c>__Internal</c>
+/// instead, resolving against the packed static xcframework linked into the app binary.
 /// </summary>
 /// <remarks>
 /// All libsodium exports use the cdecl calling convention (<c>SODIUM_EXPORT</c>), declared
@@ -24,7 +26,16 @@ internal static partial class NativeMethods
     /// <summary>
     /// The libsodium module name handed to the .NET native library loader.
     /// </summary>
+#if IOS || MACCATALYST
+    // On iOS and Mac Catalyst libsodium is statically linked into the app binary (the packed
+    // xcframework, wired in by this package's buildTransitive NativeReference targets), and
+    // Apple platforms probe a named module only as a dynamic library — __Internal is the
+    // documented mechanism that resolves these imports against the current program and feeds
+    // the toolchain's exported-symbols list so they survive native linking.
+    private const string LibraryName = "__Internal";
+#else
     private const string LibraryName = "libsodium";
+#endif
 
 
     /// <summary>

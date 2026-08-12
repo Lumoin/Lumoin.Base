@@ -6,8 +6,22 @@
          to the crypto P/Invokes as a raw pointer: reading MemoryHandle.Pointer (a void*) after
          pinning to obtain that nint requires unsafe context. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Description>The libsodium package for the Lumoin family. Crypto binding: Ed25519 seed-keypair generation, detached signing and verification, Ed25519-to-X25519 key conversion, X25519 scalar multiplication, XChaCha20-Poly1305 authenticated encryption, and the ML-KEM-768 (FIPS 203) and X-Wing hybrid post-quantum KEMs as thin Span-based LibraryImport wrappers, with secret-key scratch memory composed by the caller as a MemoryPool&lt;byte&gt;. Memory backing: SodiumBacking implements the NativeBackingAllocator seam so BaseMemoryPool serves AllocationKind.Native rents as per-rent isolated sodium_malloc guarded allocations (not available on browser-wasm). Depends only on Lumoin.Base. The libsodium native library ships inside the package for desktop and server targets, built by the family from pinned upstream source, and is statically linked at publish on browser-wasm.</Description>
+    <Description>The libsodium package for the Lumoin family. Crypto binding: Ed25519 seed-keypair generation, detached signing and verification, Ed25519-to-X25519 key conversion, X25519 scalar multiplication, XChaCha20-Poly1305 authenticated encryption, and the ML-KEM-768 (FIPS 203) and X-Wing hybrid post-quantum KEMs as thin Span-based LibraryImport wrappers, with secret-key scratch memory composed by the caller as a MemoryPool&lt;byte&gt;. Memory backing: SodiumBacking implements the NativeBackingAllocator seam so BaseMemoryPool serves AllocationKind.Native rents as per-rent isolated sodium_malloc guarded allocations (not available on browser-wasm). Depends only on Lumoin.Base. The libsodium native library ships inside the package, built by the family from pinned upstream source: shared libraries for win-x64/arm64, linux-x64/arm64, osx-x64/arm64 and android-arm64/x64, a static xcframework linked into iOS and Mac Catalyst app builds through the package's buildTransitive targets, and static linking at publish on browser-wasm.</Description>
     <PackageTags>libsodium;sodium;ed25519;x25519;curve25519;signing;verification;key-conversion;xchacha20poly1305;aead;ml-kem;x-wing;post-quantum;secure-memory;guarded-memory;memory;pool;lumoin</PackageTags>
+  </PropertyGroup>
+
+  <!-- Apple mobile TFMs are OPT-IN (-p:LumoinAppleTfms=true): the ios/maccatalyst workloads
+       exist only on Windows and macOS hosts, so the default TFM set stays net10.0 everywhere and
+       every existing CI leg, test project, and sibling source consumer restores and builds as
+       before against the committed packages.lock.json. The pack-libsodium CI job (macOS) opts in
+       so the published package carries lib/net10.0-ios and lib/net10.0-maccatalyst assemblies
+       whose LibraryImport module name is __Internal — the only resolution mechanism that works
+       against the statically linked xcframework — restoring against the separate
+       packages.apple.lock.json committed for that TFM set. -->
+  <PropertyGroup Condition="'$(LumoinAppleTfms)' == 'true'">
+    <TargetFramework></TargetFramework>
+    <TargetFrameworks>net10.0;net10.0-ios;net10.0-maccatalyst</TargetFrameworks>
+    <NuGetLockFilePath>packages.apple.lock.json</NuGetLockFilePath>
   </PropertyGroup>
 
   <!-- Directory.Build.props adds SupportedPlatform browser to every non-Tests project. Unlike
@@ -23,11 +37,28 @@
 
   <!-- The family-built libsodium binaries ship INSIDE this package (runtimes/<rid>/native) so it
        works as-is from NuGet. CI stages them via -p:NativeAssetsStagingDirectory after building
-       libsodium from the pinned, checksum-verified upstream tarball and gating each binary on
-       this package's own test suite; a local pack without the property simply packs no binaries.
+       libsodium from the pinned, checksum-verified upstream tarball and gating each binary
+       (test-suite run where the build runner can load it, provenance verification where it
+       cannot); a local pack without the property simply packs no binaries.
        Browser-wasm ignores runtimes/ assets and statically links a libsodium.a instead. -->
   <ItemGroup Condition="'$(NativeAssetsStagingDirectory)' != ''">
     <None Include="$(NativeAssetsStagingDirectory)/**/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- iOS and Mac Catalyst do not consume runtimes/<rid>/native shared libraries: the Apple
+       toolchain links a static archive into the app binary instead. CI stages the family-built
+       static xcframework (arm64 device, arm64/x86_64 simulator and Catalyst slices) via
+       -p:AppleXcframeworkDirectory, and the buildTransitive targets below wire it into
+       consuming ios/maccatalyst builds as a NativeReference. A local pack without the property
+       packs no xcframework; the targets' Exists() guard keeps such a package harmless. -->
+  <ItemGroup Condition="'$(AppleXcframeworkDirectory)' != ''">
+    <None Include="$(AppleXcframeworkDirectory)/**/*" Pack="true" PackagePath="xcframeworks/libsodium.xcframework/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- Packed to both build/ and buildTransitive/ so direct and transitive PackageReference
+       consumers import it alike. -->
+  <ItemGroup>
+    <None Include="buildTransitive/Lumoin.Base.Libsodium.targets" Pack="true" PackagePath="build/Lumoin.Base.Libsodium.targets;buildTransitive/Lumoin.Base.Libsodium.targets" />
   </ItemGroup>
 
   <ItemGroup>
