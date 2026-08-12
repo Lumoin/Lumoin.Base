@@ -1,0 +1,21 @@
+<Project>
+
+  <!-- Wires the family-built static libsodium into iOS and Mac Catalyst app builds. These
+       platforms do not consume runtimes/<rid>/native shared libraries: the static archive slices
+       inside xcframeworks/libsodium.xcframework (arm64 device, arm64/x86_64 simulator and
+       Catalyst) are linked into the app binary by the Apple toolchain through this
+       NativeReference. The Exists() guard keeps a package that was packed without native assets
+       (a local dotnet pack without -p:AppleXcframeworkDirectory) harmless to consumers. -->
+
+  <PropertyGroup>
+    <_LumoinLibsodiumXcframework>$(MSBuildThisFileDirectory)../xcframeworks/libsodium.xcframework</_LumoinLibsodiumXcframework>
+  </PropertyGroup>
+
+  <ItemGroup Condition="('$(TargetPlatformIdentifier)' == 'ios' Or '$(TargetPlatformIdentifier)' == 'maccatalyst') And Exists('$(_LumoinLibsodiumXcframework)')">
+    <NativeReference Include="$(_LumoinLibsodiumXcframework)">
+      <Kind>Static</Kind>
+      <ForceLoad>True</ForceLoad>
+    </NativeReference>
+  </ItemGroup>
+
+</Project>

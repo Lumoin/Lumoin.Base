@@ -32,9 +32,11 @@ env:
   # The shippable library NuGet packages, packed and uploaded in the canonical pack
   # step below. Each carries a NuGet <Description> and packs by default. As the project
   # grows, add further project names here.
+  # Lumoin.Base.Libsodium is deliberately absent: it is packed by its own macOS job
+  # (pack-libsodium) because its opt-in Apple mobile TFMs need the ios/maccatalyst workloads,
+  # which exist only on Windows and macOS hosts.
   LIBRARY_PROJECTS: >
     Lumoin.Base
-    Lumoin.Base.Libsodium
     Lumoin.Base.MemoryProtection
 
   # Test projects — each compiled executable is an input to dotnet-coverage in its
@@ -43,9 +45,10 @@ env:
   LIBSODIUM_TESTS: Lumoin.Base.Libsodium.Tests
   MEMORY_PROTECTION_TESTS: Lumoin.Base.MemoryProtection.Tests
 
-  # The pinned upstream libsodium source the natives job builds from: bump tag, version,
-  # and hash together, deliberately. The binaries ship inside Lumoin.Base.Libsodium and
-  # Lumoin.Base.Sodium (runtimes/<rid>/native) so both work as-is from NuGet.
+  # The pinned upstream libsodium source the natives jobs build from: bump tag, version,
+  # and hash together, deliberately. The binaries ship inside Lumoin.Base.Libsodium
+  # (runtimes/<rid>/native shared libraries plus the ios/maccatalyst static xcframework)
+  # so the package works as-is from NuGet.
   LIBSODIUM_TAG: 1.0.22-RELEASE
   LIBSODIUM_VERSION: 1.0.22
   LIBSODIUM_TARBALL_SHA256: adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349
@@ -105,7 +108,7 @@ jobs:
     steps:
     - name: Harden Runner
       if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' }}
-      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+      uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40
       with:
         disable-sudo: true
         egress-policy: block
@@ -195,12 +198,15 @@ jobs:
       with:
         trx_files: '${{ github.workspace }}/reports/**/*.trx'
 
-  # Builds the libsodium native binaries that ship inside Lumoin.Base.Libsodium and
-  # Lumoin.Base.Sodium. Every leg downloads the pinned upstream release tarball, verifies it
-  # against the pinned SHA-256, builds it on a GitHub-hosted runner, and proves the binary by
-  # running the Lumoin.Base.Libsodium test suite against it with a hard "skipped: 0" gate: the
-  # suite skips as inconclusive without a working library, so a binary that fails to load
-  # cannot pass silently.
+  # Builds the libsodium native binaries that ship inside Lumoin.Base.Libsodium. Every leg
+  # downloads the pinned upstream release tarball, verifies it against the pinned SHA-256, and
+  # builds it on a GitHub-hosted runner. The gate is two-tier. Host legs (kind: host) prove the
+  # binary by running the Lumoin.Base.Libsodium test suite against it with a hard "skipped: 0"
+  # gate: the suite skips as inconclusive without a working library, so a binary that fails to
+  # load cannot pass silently. Cross-compiled legs (kind: android here, plus the
+  # natives-apple-mobile job below) cannot execute their output on the build runner, so they
+  # ship on provenance instead: the pinned checksum-verified source plus architecture and
+  # exported-symbol verification of each artifact.
   natives:
     name: libsodium ${{ matrix.rid }}
     permissions:
@@ -210,15 +216,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, rid: win-x64 }
-          - { os: ubuntu-latest, rid: linux-x64 }
-          - { os: ubuntu-24.04-arm, rid: linux-arm64 }
-          - { os: macos-15-intel, rid: osx-x64 }
-          - { os: macos-latest, rid: osx-arm64 }
+          - { os: windows-latest, rid: win-x64, kind: host, msvc-platform: x64 }
+          - { os: windows-11-arm, rid: win-arm64, kind: host, msvc-platform: ARM64 }
+          - { os: ubuntu-latest, rid: linux-x64, kind: host }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64, kind: host }
+          - { os: macos-15-intel, rid: osx-x64, kind: host }
+          - { os: macos-latest, rid: osx-arm64, kind: host }
+          # NDK cross-builds; the per-arch dist-build wrapper names its output prefix after the
+          # compiler -march value, not the Android ABI, hence android-prefix.
+          - { os: ubuntu-latest, rid: android-arm64, kind: android, android-script: android-armv8-a.sh, android-prefix: libsodium-android-armv8-a+crypto }
+          - { os: ubuntu-latest, rid: android-x64, kind: android, android-script: android-x86_64.sh, android-prefix: libsodium-android-westmere }
     steps:
     - name: Harden Runner
       if: ${{ runner.os == 'Linux' }}
-      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+      uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40
       with:
         disable-sudo: true
         egress-policy: block
@@ -227,7 +238,10 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+    # Only the host legs run the test-suite gate; the Android cross-build legs never execute
+    # .NET and skip the SDK setup entirely.
     - name: Set up .NET SDK
+      if: ${{ matrix.kind == 'host' }}
       uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
       with:
         cache: true
@@ -235,6 +249,7 @@ jobs:
         global-json-file: global.json
 
     - name: Install dependencies
+      if: ${{ matrix.kind == 'host' }}
       run: dotnet restore --locked-mode
 
     - name: Download and verify the pinned libsodium source (Unix)
@@ -259,7 +274,7 @@ jobs:
         tar -xzf $tarball -C $src --strip-components=1
 
     - name: Build libsodium (Unix)
-      if: ${{ runner.os != 'Windows' }}
+      if: ${{ runner.os != 'Windows' && matrix.kind == 'host' }}
       run: |
         set -euo pipefail
         cd "$RUNNER_TEMP/libsodium-src"
@@ -275,6 +290,23 @@ jobs:
           cp "$(readlink -f "$RUNNER_TEMP/libsodium-out/lib/libsodium.dylib")" "$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.dylib"
         fi
 
+    # The upstream per-arch wrapper drives the NDK toolchain the ubuntu image preinstalls
+    # (ANDROID_NDK_HOME): --disable-soname-versions yields the flat libsodium.so name and
+    # LDFLAGS already carry the 16 KiB max-page-size Android 15+ requires. The Android scripts
+    # default to --enable-minimal, so LIBSODIUM_FULL_BUILD keeps the API surface identical to
+    # every other packed binary. NDK_PLATFORM android-21 is the .NET for Android minimum.
+    - name: Build libsodium (Android)
+      if: ${{ matrix.kind == 'android' }}
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP/libsodium-src"
+        export NDK_PLATFORM=android-21
+        export LIBSODIUM_FULL_BUILD=Y
+        ./dist-build/${{ matrix.android-script }}
+        mkdir -p "$RUNNER_TEMP/staging/${{ matrix.rid }}/native"
+        cp "./${{ matrix.android-prefix }}/lib/libsodium.so" "$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.so"
+      timeout-minutes: 15
+
     - name: Build libsodium (Windows, MSVC)
       if: ${{ runner.os == 'Windows' }}
       shell: pwsh
@@ -283,7 +315,7 @@ jobs:
         $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
         if (-not $msbuild) { throw 'MSBuild not found.' }
         $src = Join-Path $env:RUNNER_TEMP 'libsodium-src'
-        & $msbuild (Join-Path $src 'builds\msvc\vs2022\libsodium.sln') /m /p:Configuration=DynRelease /p:Platform=x64 /v:minimal
+        & $msbuild (Join-Path $src 'builds\msvc\vs2022\libsodium.sln') /m /p:Configuration=DynRelease /p:Platform=${{ matrix.msvc-platform }} /v:minimal
         if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with $LASTEXITCODE" }
         $dll = Get-ChildItem (Join-Path $src 'bin') -Recurse -Filter libsodium.dll | Where-Object { $_.DirectoryName -match 'dynamic' } | Select-Object -First 1
         if (-not $dll) { throw 'libsodium.dll not produced.' }
@@ -292,7 +324,7 @@ jobs:
         Copy-Item $dll.FullName (Join-Path $stage 'libsodium.dll')
 
     - name: Prove the binary with the Lumoin.Base.Libsodium test suite (Unix)
-      if: ${{ runner.os != 'Windows' }}
+      if: ${{ runner.os != 'Windows' && matrix.kind == 'host' }}
       run: |
         set -euo pipefail
         dotnet build test/Lumoin.Base.Libsodium.Tests/Lumoin.Base.Libsodium.Tests.csproj --configuration "$BUILD_CONFIGURATION" --no-restore
@@ -310,13 +342,35 @@ jobs:
       run: |
         dotnet build test/Lumoin.Base.Libsodium.Tests/Lumoin.Base.Libsodium.Tests.csproj --configuration $env:BUILD_CONFIGURATION --no-restore
         if ($LASTEXITCODE -ne 0) { throw 'Test build failed.' }
-        $env:LUMOIN_SODIUM_LIBRARY = Join-Path $env:RUNNER_TEMP "staging\win-x64\native\libsodium.dll"
+        $env:LUMOIN_SODIUM_LIBRARY = Join-Path $env:RUNNER_TEMP "staging\${{ matrix.rid }}\native\libsodium.dll"
         $out = & ".\test\Lumoin.Base.Libsodium.Tests\bin\$env:BUILD_CONFIGURATION\net10.0\Lumoin.Base.Libsodium.Tests.exe" | Out-String
         Write-Host $out
         if ($LASTEXITCODE -ne 0) { throw "Test run failed with $LASTEXITCODE" }
         if ($out -notmatch 'failed: 0') { throw 'Test failures against the built binary.' }
         if ($out -notmatch 'skipped: 0') { throw 'Suite skipped tests: the built binary did not load.' }
       timeout-minutes: 10
+
+    # An Android binary cannot execute on the build runner, so this leg's gate is provenance:
+    # the pinned checksum-verified source above, plus the machine architecture, the exported
+    # sodium_init symbol, and the 16 KiB LOAD alignment Android 15 requires. This is a weaker
+    # gate than the host legs' test-suite run — a leg that could load the binary would prove it
+    # instead.
+    - name: Verify the binary provenance (Android)
+      if: ${{ matrix.kind == 'android' }}
+      run: |
+        set -euo pipefail
+        lib="$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.so"
+        case "${{ matrix.rid }}" in
+          android-arm64) expected='AArch64' ;;
+          android-x64) expected='X86-64' ;;
+          *) echo "No expected machine for ${{ matrix.rid }}"; exit 1 ;;
+        esac
+        readelf -h "$lib" | grep -qi "$expected" || { echo "Wrong machine architecture:"; readelf -h "$lib"; exit 1; }
+        nm -D "$lib" | grep ' T sodium_init' >/dev/null || { echo "sodium_init is not exported."; exit 1; }
+        readelf -lW "$lib" | awk '$1 == "LOAD" { print $NF }' | while read -r align; do
+          [ $((align)) -ge 16384 ] || { echo "LOAD alignment $align is under 16 KiB."; exit 1; }
+        done
+        sha256sum "$lib"
 
     - name: Upload staged native binary
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -325,21 +379,142 @@ jobs:
         path: ${{ runner.temp }}/staging/
         if-no-files-found: error
 
-  # Packing is canonical: one package per release, produced on one runner from the solution
-  # build plus the natives artifacts, so every packed Lumoin.Base.Libsodium and
-  # Lumoin.Base.Sodium carries the family-built libsodium binaries and works as-is from NuGet.
+  # Builds the iOS and Mac Catalyst static libsodium slices from the same pinned,
+  # checksum-verified tarball and assembles them into one xcframework. The configure flags
+  # mirror upstream dist-build/apple-xcframework.sh, narrowed to the slices .NET targets
+  # (arm64 device; arm64/x86_64 simulator and Catalyst; no arm64e, watchOS, tvOS or visionOS),
+  # which turns upstream's 28 sequential configure+make passes into 5. These platforms do not
+  # consume runtimes/<rid>/native shared libraries — the consuming app links the static archive
+  # through the NativeReference added by the package's buildTransitive targets — so this
+  # artifact deliberately does NOT match the native-* pattern the pack job merges under
+  # runtimes/. Like the Android legs, the slices cannot execute on the build runner and ship on
+  # provenance (pinned source plus architecture and symbol verification), not the test-suite
+  # gate.
+  natives-apple-mobile:
+    name: libsodium ios/maccatalyst xcframework
+    permissions:
+      contents: read
+    runs-on: macos-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+    - name: Download and verify the pinned libsodium source
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/libsodium.tar.gz" "https://github.com/jedisct1/libsodium/releases/download/${LIBSODIUM_TAG}/libsodium-${LIBSODIUM_VERSION}.tar.gz"
+        echo "${LIBSODIUM_TARBALL_SHA256}  $RUNNER_TEMP/libsodium.tar.gz" | shasum -a 256 -c -
+        mkdir -p "$RUNNER_TEMP/libsodium-src"
+        tar -xzf "$RUNNER_TEMP/libsodium.tar.gz" -C "$RUNNER_TEMP/libsodium-src" --strip-components=1
+
+    - name: Build the static slices and assemble the xcframework
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP/libsodium-src"
+        XCODEDIR="$(xcode-select -p)"
+        test -d "${XCODEDIR}/Platforms/iPhoneOS.platform" || { echo "Xcode with the iOS SDK is required."; exit 1; }
+        PROCESSORS="$(getconf _NPROCESSORS_ONLN)"
+        SLICES="$RUNNER_TEMP/slices"
+
+        # iOS 12.2 is the .NET minimum supported deployment target; the 13.1 Catalyst -macabi
+        # targets below match upstream. Flags per slice mirror dist-build/apple-xcframework.sh.
+        IOS_VERSION_MIN=12.2
+
+        build_slice() {
+          slice_name=$1; host=$2; cross=$3
+          make distclean >/dev/null 2>&1 || true
+          if [ -n "$cross" ]; then
+            ./configure "$cross" --host="$host" --prefix="$SLICES/$slice_name"
+          else
+            ./configure --host="$host" --prefix="$SLICES/$slice_name"
+          fi
+          make -j"$PROCESSORS" install
+        }
+
+        SDK="${XCODEDIR}/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+        export CFLAGS="-O3 -arch arm64 -isysroot ${SDK} -mios-version-min=${IOS_VERSION_MIN}"
+        export LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=${IOS_VERSION_MIN}"
+        build_slice ios-arm64 aarch64-apple-darwin23 ''
+
+        SDK="${XCODEDIR}/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"
+        export CFLAGS="-O3 -arch arm64 -isysroot ${SDK} -mios-simulator-version-min=${IOS_VERSION_MIN}"
+        export LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=${IOS_VERSION_MIN}"
+        build_slice ios-sim-arm64 aarch64-apple-darwin23 ''
+        export CFLAGS="-O3 -arch x86_64 -isysroot ${SDK} -mios-simulator-version-min=${IOS_VERSION_MIN}"
+        export LDFLAGS="-arch x86_64 -isysroot ${SDK} -mios-simulator-version-min=${IOS_VERSION_MIN}"
+        build_slice ios-sim-x86_64 x86_64-apple-darwin23 cross_compiling=yes
+
+        SDK="${XCODEDIR}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+        export CFLAGS="-O3 -arch arm64 -target arm64-apple-ios13.1-macabi -isysroot ${SDK}"
+        export LDFLAGS="-arch arm64 -target arm64-apple-ios13.1-macabi -isysroot ${SDK}"
+        build_slice catalyst-arm64 aarch64-apple-ios ''
+        export CFLAGS="-O3 -arch x86_64 -target x86_64-apple-ios13.1-macabi -isysroot ${SDK}"
+        export LDFLAGS="-arch x86_64 -target x86_64-apple-ios13.1-macabi -isysroot ${SDK}"
+        build_slice catalyst-x86_64 x86_64-apple-ios cross_compiling=yes
+
+        # One fat archive per xcframework library slot. No -headers: the P/Invoke binding needs
+        # no C headers, and omitting them keeps the packed xcframework lean.
+        mkdir -p "$RUNNER_TEMP/bundles/ios" "$RUNNER_TEMP/bundles/ios-simulator" "$RUNNER_TEMP/bundles/catalyst"
+        cp "$SLICES/ios-arm64/lib/libsodium.a" "$RUNNER_TEMP/bundles/ios/libsodium.a"
+        lipo -create "$SLICES/ios-sim-arm64/lib/libsodium.a" "$SLICES/ios-sim-x86_64/lib/libsodium.a" -output "$RUNNER_TEMP/bundles/ios-simulator/libsodium.a"
+        lipo -create "$SLICES/catalyst-arm64/lib/libsodium.a" "$SLICES/catalyst-x86_64/lib/libsodium.a" -output "$RUNNER_TEMP/bundles/catalyst/libsodium.a"
+
+        mkdir -p "$RUNNER_TEMP/xcframework-staging"
+        xcodebuild -create-xcframework \
+          -library "$RUNNER_TEMP/bundles/ios/libsodium.a" \
+          -library "$RUNNER_TEMP/bundles/ios-simulator/libsodium.a" \
+          -library "$RUNNER_TEMP/bundles/catalyst/libsodium.a" \
+          -output "$RUNNER_TEMP/xcframework-staging/libsodium.xcframework"
+      timeout-minutes: 30
+
+    # Same provenance gate as the Android legs: these archives cannot execute here, so verify
+    # architectures, the sodium_init symbol in every architecture slice, and the xcframework
+    # manifest. The symbol check names each -arch explicitly — llvm-nm otherwise dumps only the
+    # host-arch slice of a universal archive, silently skipping the x86_64 halves on this arm64
+    # runner — and uses plain grep >/dev/null rather than grep -q so nm's output is drained and
+    # can never die on a closed pipe under pipefail.
+    - name: Verify the xcframework provenance
+      run: |
+        set -euo pipefail
+        xcf="$RUNNER_TEMP/xcframework-staging/libsodium.xcframework"
+        plutil -lint "$xcf/Info.plist"
+        slice_count=$(find "$xcf" -name libsodium.a | wc -l | tr -d ' ')
+        [ "$slice_count" -eq 3 ] || { echo "Expected 3 slices, found $slice_count."; exit 1; }
+        lipo -archs "$RUNNER_TEMP/bundles/ios/libsodium.a" | grep -w arm64 >/dev/null
+        for b in ios-simulator catalyst; do
+          archs=$(lipo -archs "$RUNNER_TEMP/bundles/$b/libsodium.a")
+          echo "$archs" | grep -w arm64 >/dev/null || { echo "$b is missing arm64."; exit 1; }
+          echo "$archs" | grep -w x86_64 >/dev/null || { echo "$b is missing x86_64."; exit 1; }
+        done
+        find "$xcf" -name libsodium.a | while read -r a; do
+          for arch in $(lipo -archs "$a"); do
+            nm -g -arch "$arch" "$a" | grep ' T _sodium_init' >/dev/null || { echo "sodium_init missing in $a ($arch)."; exit 1; }
+          done
+        done
+        find "$xcf" -type f -exec shasum -a 256 {} \;
+
+    - name: Upload the xcframework
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: xcframework-ios-maccatalyst
+        path: ${{ runner.temp }}/xcframework-staging/
+        if-no-files-found: error
+
+  # Packing is canonical: one package per release per runner. This job packs the projects with
+  # no native payload (LIBRARY_PROJECTS); Lumoin.Base.Libsodium is packed by pack-libsodium
+  # below, which needs the natives artifacts and the Apple workloads.
   pack:
     name: Pack library NuGet packages
     permissions:
       contents: read
       id-token: write
       attestations: write
-    needs: [ build, natives ]
+    needs: [ build ]
     if: ${{ github.repository_owner == 'lumoin' }}
     runs-on: ubuntu-latest
     steps:
     - name: Harden Runner
-      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+      uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40
       with:
         disable-sudo: true
         egress-policy: block
@@ -387,21 +562,6 @@ jobs:
       run: dotnet build Lumoin.Base.slnx --tl --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore --property:ContinuousIntegrationBuild=true --property:Version=${{ env.VERSION }} --property:InformationalVersion=${{ env.PACKAGE_VERSION }} --property:AssemblyVersion=${{ env.TAG_VERSION }} --property:FileVersion=${{ env.TAG_VERSION }}
       timeout-minutes: 15
 
-    - name: Download native binaries
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-      with:
-        pattern: native-*
-        merge-multiple: true
-        path: ./native-staging
-
-    - name: Verify every native binary is present
-      run: |
-        set -euo pipefail
-        for f in win-x64/native/libsodium.dll linux-x64/native/libsodium.so linux-arm64/native/libsodium.so osx-x64/native/libsodium.dylib osx-arm64/native/libsodium.dylib; do
-          test -f "./native-staging/$f" || { echo "Missing $f"; exit 1; }
-        done
-        find ./native-staging -type f -exec sha256sum {} \;
-
     - name: Pack library NuGet packages
       run: |
         for project in $LIBRARY_PROJECTS; do
@@ -412,7 +572,6 @@ jobs:
             --no-build \
             --output nupkgs \
             --property:PackageVersion="${PACKAGE_VERSION%%+*}" \
-            --property:NativeAssetsStagingDirectory="$PWD/native-staging" \
             "$path"
         done
 
@@ -433,6 +592,124 @@ jobs:
         name: nupkg-libraries
         path: ./nupkgs/*.*
 
+  # Packs Lumoin.Base.Libsodium on macOS: its opt-in Apple mobile TFMs (-p:LumoinAppleTfms=true,
+  # compiled with the __Internal module name the statically linked xcframework requires) need
+  # the ios/maccatalyst workloads, which exist only on Windows and macOS hosts — the ubuntu pack
+  # job cannot even restore that TFM set. Restores against the committed packages.apple.lock.json.
+  # step-security/harden-runner supports only Linux, so this job runs without it, matching the
+  # repository's macOS natives legs.
+  pack-libsodium:
+    name: Pack Lumoin.Base.Libsodium NuGet package
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    needs: [ build, natives, natives-apple-mobile ]
+    if: ${{ github.repository_owner == 'lumoin' }}
+    runs-on: macos-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        fetch-depth: 0
+        fetch-tags: true
+
+    - name: Set up .NET SDK
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      with:
+        cache: true
+        cache-dependency-path: '**/packages*.lock.json'
+        global-json-file: global.json
+
+    # Workload versions ride the SDK band resolved from global.json; the workload manifests and
+    # packs come from nuget.org like every other dependency.
+    - name: Install the ios and maccatalyst workloads
+      run: dotnet workload install ios maccatalyst
+      timeout-minutes: 15
+
+    - name: Install dependencies
+      run: dotnet restore src/Lumoin.Base.Libsodium/Lumoin.Base.Libsodium.csproj --locked-mode --property:LumoinAppleTfms=true
+
+    # Compute the package version with the same rules as the build legs (see the comment there).
+    - name: Set NuGet package and suffix version
+      run: |
+        latestTag=$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.1)
+        if [[ $GITHUB_EVENT_NAME == 'release' ]]; then
+          arrTag=(${GITHUB_REF//\// })
+          VERSION="${arrTag[2]}"
+          VERSION="${VERSION//v}"
+          echo "PACKAGE_VERSION=${VERSION}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "TAG_VERSION=${VERSION}" >> "$GITHUB_ENV"
+        elif [[ $GITHUB_REF == 'refs/heads/develop' ]]; then
+          echo "PACKAGE_VERSION=${latestTag//v}-develop.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "VERSION=${latestTag//v}-develop.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "TAG_VERSION=${latestTag//v}" >> "$GITHUB_ENV"
+        else
+          echo "PACKAGE_VERSION=${latestTag//v}-build.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "VERSION=${latestTag//v}-build.${GITHUB_RUN_ID}+${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "TAG_VERSION=${latestTag//v}" >> "$GITHUB_ENV"
+        fi
+      shell: bash
+
+    - name: Build
+      run: dotnet build src/Lumoin.Base.Libsodium/Lumoin.Base.Libsodium.csproj --tl --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore --property:LumoinAppleTfms=true --property:ContinuousIntegrationBuild=true --property:Version=${{ env.VERSION }} --property:InformationalVersion=${{ env.PACKAGE_VERSION }} --property:AssemblyVersion=${{ env.TAG_VERSION }} --property:FileVersion=${{ env.TAG_VERSION }}
+      timeout-minutes: 15
+
+    - name: Download native binaries
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        pattern: native-*
+        merge-multiple: true
+        path: ./native-staging
+
+    # The ios/maccatalyst xcframework travels under its own artifact name and staging
+    # directory: everything under native-staging is packed verbatim into runtimes/, where
+    # Apple mobile platforms would never find it.
+    - name: Download the ios/maccatalyst xcframework
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        name: xcframework-ios-maccatalyst
+        path: ./apple-staging
+
+    - name: Verify every native binary is present
+      run: |
+        set -euo pipefail
+        for f in win-x64/native/libsodium.dll win-arm64/native/libsodium.dll linux-x64/native/libsodium.so linux-arm64/native/libsodium.so osx-x64/native/libsodium.dylib osx-arm64/native/libsodium.dylib android-arm64/native/libsodium.so android-x64/native/libsodium.so; do
+          test -f "./native-staging/$f" || { echo "Missing $f"; exit 1; }
+        done
+        test -f ./apple-staging/libsodium.xcframework/Info.plist || { echo "Missing the xcframework manifest."; exit 1; }
+        slice_count=$(find ./apple-staging/libsodium.xcframework -name libsodium.a | wc -l | tr -d ' ')
+        [ "$slice_count" -eq 3 ] || { echo "Expected 3 xcframework slices, found $slice_count."; exit 1; }
+        find ./native-staging ./apple-staging -type f -exec shasum -a 256 {} \;
+
+    - name: Pack Lumoin.Base.Libsodium
+      run: |
+        dotnet pack --verbosity normal \
+          --configuration "$BUILD_CONFIGURATION" \
+          --no-build \
+          --output nupkgs \
+          --property:LumoinAppleTfms=true \
+          --property:PackageVersion="${PACKAGE_VERSION%%+*}" \
+          --property:NativeAssetsStagingDirectory="$PWD/native-staging" \
+          --property:AppleXcframeworkDirectory="$PWD/apple-staging/libsodium.xcframework" \
+          src/Lumoin.Base.Libsodium/Lumoin.Base.Libsodium.csproj
+
+    # Same gating as the pack job above: Sigstore needs the public transparency log, available
+    # once the repository is public.
+    - name: Generate artifact attestation
+      if: ${{ github.actor != 'dependabot[bot]' && github.event.repository.private == false }}
+      uses: lumoin/trusted-devsecops/.github/actions/sign-artifact@bd2b7f91e73d758f3126562d6a569fc0f31814ee
+      with:
+        subject-path: './nupkgs/*.nupkg'
+
+    - name: Upload the Lumoin.Base.Libsodium NuGet package
+      if: ${{ github.actor != 'dependabot[bot]' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: nupkg-libsodium
+        path: ./nupkgs/*.*
+
   # Pre-release goes to GitHub Packages on the develop branch. The release deploy goes
   # to NuGet.org on tagged GitHub releases via NuGet trusted publishing (OIDC) — no
   # API key needed beyond a registered nuget.org profile.
@@ -440,12 +717,12 @@ jobs:
     name: Create and upload Lumoin.Base pre-release packages to GitHub
     permissions:
       packages: write
-    needs: [ pack ]
+    needs: [ pack, pack-libsodium ]
     if: ${{ github.ref == 'refs/heads/develop' && github.repository_owner == 'lumoin' }}
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40
         with:
           disable-sudo: true
           egress-policy: block
@@ -470,7 +747,7 @@ jobs:
       packages: write
       # id-token is required for NuGet trusted publishing (OIDC).
       id-token: write
-    needs: [ pack ]
+    needs: [ pack, pack-libsodium ]
     if: ${{ github.event_name == 'release' && github.repository_owner == 'lumoin' }}
     runs-on: ubuntu-latest
     # Bind publishing to the "Release" deployment environment so the OIDC token carries the
@@ -478,7 +755,7 @@ jobs:
     environment: Release
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40
         with:
           disable-sudo: true
           egress-policy: block

@@ -102,12 +102,21 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   composed by the caller as a `MemoryPool<byte>` (guarded native, locked, pinned, or managed
   backing) - plus the `SodiumBacking` guarded-memory seam implementation described above. Depends
   only on `Lumoin.Base`. The libsodium 1.0.22 native library ships inside the package
-  (win-x64, linux-x64, linux-arm64, osx-x64, osx-arm64), built by the family from the pinned,
-  checksum-verified upstream release source, so the package works as-is from NuGet; on
-  browser-wasm the same binding is statically linked at publish instead.
+  (win-x64, win-arm64, linux-x64, linux-arm64, osx-x64, osx-arm64, android-arm64, android-x64;
+  iOS and Mac Catalyst link a bundled static xcframework through the package's buildTransitive
+  targets), built by the family from the pinned, checksum-verified upstream release source, so
+  the package works as-is from NuGet; on browser-wasm the same binding is statically linked at
+  publish instead. Binaries the build runner can load are proven by running the package's own
+  test suite against them; cross-compiled mobile binaries ship on pinned-source provenance with
+  architecture and exported-symbol verification. The package multi-targets `net10.0` plus
+  `net10.0-ios`/`net10.0-maccatalyst`; the Apple assemblies import via `__Internal`, resolving
+  against the statically linked xcframework the buildTransitive targets wire into the app build.
 
 ### Changed
 
+- Toolchain refresh: .NET SDK 10.0.400 (the wasm smoke pins .NET 11 preview 7), MSTest 4.3.3,
+  Microsoft.Testing.Extensions 2.3.3, CsCheck 4.8.0, System.Security.Cryptography.Xml 10.0.11,
+  and harden-runner v2.20.1.
 - Package `Lumoin.Base.Sodium` is retired: its guarded-memory backing (`SodiumBacking`,
   namespace now `Lumoin.Base.Libsodium`) ships in `Lumoin.Base.Libsodium`. 0.0.7 remains the
   last release of the retired id.

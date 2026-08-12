@@ -25,12 +25,6 @@ env:
   DOTNET_NOLOGO: true
   NUGET_XMLDOC_MODE: skip
 
-  # The preview SDK and the wasm-tools workload are installed into a runner-writable
-  # directory: the runner's default /usr/share/dotnet needs sudo for workload installs,
-  # and harden-runner runs with sudo disabled.
-  DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
-  DOTNET_ROOT: ${{ runner.temp }}/dotnet
-
   # The family builds its own native assets from the pinned upstream tag — never from
   # third-party repackagings. Keep in sync with the family libsodium fork once it exists.
   LIBSODIUM_TAG: 1.0.22-RELEASE
@@ -47,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Harden Runner
-      uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+      uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40
       with:
         disable-sudo: true
         # Audit rather than block: the preview SDK, the wasm-tools workload, and the emsdk
@@ -57,6 +51,16 @@ jobs:
 
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+    # The preview SDK and the wasm-tools workload are installed into a runner-writable
+    # directory: the runner's default /usr/share/dotnet needs sudo for workload installs,
+    # and harden-runner runs with sudo disabled. Set via GITHUB_ENV in a step because the
+    # runner context does not exist in workflow-level env — a workflow that references it
+    # there fails to parse and never runs at all (schedule and dispatch alike).
+    - name: Point the .NET install at a runner-writable directory
+      run: |
+        echo "DOTNET_INSTALL_DIR=$RUNNER_TEMP/dotnet" >> "$GITHUB_ENV"
+        echo "DOTNET_ROOT=$RUNNER_TEMP/dotnet" >> "$GITHUB_ENV"
 
     - name: Set up .NET 11 preview SDK
       uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
