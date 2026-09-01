@@ -84,21 +84,14 @@
     <AssemblyInformationalVersion>0.0.0</AssemblyInformationalVersion>
     <NeutralLanguage>en-US</NeutralLanguage>
 
-    <AppendToReleaseNotesProperty>
-      <![CDATA[
-See full changelog at https://github.com/Lumoin/Lumoin.Base/blob/main/CHANGELOG.md.]]>
-    </AppendToReleaseNotesProperty>
-    <ChangelogFile>../../CHANGELOG.md</ChangelogFile>
+    <!-- Release notes are authored by hand here; CHANGELOG.md is the source a human edits. -->
+    <PackageReleaseNotes>See full changelog at https://github.com/Lumoin/Lumoin.Base/blob/main/CHANGELOG.md.</PackageReleaseNotes>
 
 
     <AnalysisLevel>latest</AnalysisLevel>
     <AnalysisMode>All</AnalysisMode>
 
   </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="SIL.ReleaseTasks" PrivateAssets="all" />
-  </ItemGroup>
 
   <!-- Pack the NuGet logo and the repository readme into packable (non-test) projects. -->
   <ItemGroup Condition="!$(MSBuildProjectName.EndsWith('Tests'))">
