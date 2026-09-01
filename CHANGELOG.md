@@ -60,10 +60,14 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   is evicted when the hot fills, bounding the live set to about twice a configured capacity; eviction is safe
   because interned memory is managed and an outstanding `Utf8String` keeps its own bytes alive (the GC reclaims
   only once no view remains), so it never dangles a value already handed out. Cache hits are lock-free; `Clear()`
-  drops everything; an optional static, application-installed `Instance` mirrors the pool's ambient. Managed-only
-  by design (it relies on GC liveness, so no `Native`/`Pinned` backing). Optional OpenTelemetry metrics via
-  `Utf8StringInternerMetrics` (intern, hit, and rotation counters plus a live-count gauge), and an optional maximum
-  value length that returns oversized values uncached so no single value can bloat the resident set.
+  drops everything; an optional static, application-installed `Instance` mirrors the pool's ambient, and a
+  self-creating `Shared` is a process-wide interner on the constructor defaults for callers that install none.
+  `Intern(string)` encodes with the replacement fallback, so ill-formed UTF-16 collapses onto U+FFFD;
+  `TryIntern(string, out Utf8String)` is the strict path that returns `false` for an unpaired surrogate instead of
+  replacing it. Managed-only by design (it relies on GC liveness, so no `Native`/`Pinned` backing). Optional
+  OpenTelemetry metrics via `Utf8StringInternerMetrics` (intern, hit, and rotation counters plus a live-count
+  gauge), and an optional maximum value length that returns oversized values uncached so no single value can bloat
+  the resident set.
 - Guarded-memory backing `SodiumBacking` (in `Lumoin.Base.Libsodium`): the libsodium
   implementation of the `NativeBackingAllocator` seam. Wiring `SodiumBacking.Allocate` into a
   `BaseMemoryPool` serves `AllocationKind.Native` rents as per-rent isolated `sodium_malloc`
