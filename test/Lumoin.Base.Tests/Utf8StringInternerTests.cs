@@ -319,6 +319,7 @@ public sealed class Utf8StringInternerTests
 
 
     [TestMethod]
+    [DoNotParallelize]
     public void AmbientInstanceIsSettable()
     {
         Utf8StringInterner? previous = Utf8StringInterner.Instance;
@@ -333,6 +334,142 @@ public sealed class Utf8StringInternerTests
         {
             Utf8StringInterner.Instance = previous;
         }
+    }
+
+
+    [TestMethod]
+    public void SharedIsNeverNullAndIsTheSameInstanceEveryAccess()
+    {
+        Utf8StringInterner first = Utf8StringInterner.Shared;
+        Utf8StringInterner second = Utf8StringInterner.Shared;
+
+        Assert.IsNotNull(first, "Shared creates itself on first access, so it always exists.");
+        Assert.AreSame(first, second, "Shared is a singleton: every access returns the one process-wide interner.");
+    }
+
+
+    [TestMethod]
+    public void SharedInternsEqualTextToOneValue()
+    {
+        //Shared is process-wide, so this test uses a literal no other test interns.
+        const string Text = "shared-interns-equal-text-to-one-value";
+
+        Utf8String first = Utf8StringInterner.Shared.Intern(Text);
+        Utf8String second = Utf8StringInterner.Shared.Intern(Text);
+
+        //Utf8String equality is pure content comparison, so only equal backing memory proves the value was cached.
+        Assert.AreEqual(first.Memory, second.Memory,
+            "Interning equal text twice through Shared must hand back the one interned backing array.");
+        Assert.AreEqual(Text, first.ToString());
+    }
+
+
+    [TestMethod]
+    [DoNotParallelize]
+    public void SharedIsIndependentOfTheAmbientInstance()
+    {
+        const string Text = "shared-is-independent-of-the-ambient-instance";
+
+        Utf8StringInterner? previous = Utf8StringInterner.Instance;
+        try
+        {
+            Utf8StringInterner ambient = new();
+            Utf8StringInterner.Instance = ambient;
+
+            Utf8StringInterner shared = Utf8StringInterner.Shared;
+
+            //The ambient slot is an application's own installation; Shared is the self-created default beside it.
+            Assert.AreNotSame(ambient, shared, "Installing an ambient interner must not become Shared.");
+            Assert.AreSame(shared, Utf8StringInterner.Shared, "Shared stays the same instance across an ambient set.");
+
+            Utf8String sharedValue = shared.Intern(Text);
+            Assert.IsTrue(shared.TryGet(Encoding.UTF8.GetBytes(Text), out _));
+            Assert.IsFalse(ambient.TryGet(Encoding.UTF8.GetBytes(Text), out _),
+                "The two interners keep separate tables.");
+            Assert.AreEqual(Text, sharedValue.ToString());
+        }
+        finally
+        {
+            Utf8StringInterner.Instance = previous;
+        }
+    }
+
+
+    [TestMethod]
+    public void TryInternRejectsUnpairedSurrogateWithoutInterningIt()
+    {
+        Utf8StringInterner interner = new();
+
+        Assert.IsFalse(interner.TryIntern("\ud800", out Utf8String lone));
+        Assert.AreEqual(Utf8String.Empty, lone);
+
+        Assert.IsFalse(interner.TryIntern("a\ud800b", out Utf8String embedded));
+        Assert.AreEqual(Utf8String.Empty, embedded);
+
+        //A string long enough to take the pooled-buffer branch rather than the stackalloc one.
+        string longIllFormed = new string('a', 200) + "\ud800";
+        Assert.IsFalse(interner.TryIntern(longIllFormed, out Utf8String pooled));
+        Assert.AreEqual(Utf8String.Empty, pooled);
+
+        //A rejected value must leave no trace: nothing was hashed, copied or cached.
+        Assert.AreEqual(0, interner.Count, "A rejected string must not be interned.");
+        Assert.IsFalse(interner.TryGet("a\ufffdb"u8, out _),
+            "The strict path must not fall back to the replacement encoding.");
+    }
+
+
+    [TestMethod]
+    public void TryInternSucceedsForWellFormedTextAndSharesInternStringsTable()
+    {
+        Utf8StringInterner interner = new();
+
+        Assert.IsTrue(interner.TryIntern("well-formed", out Utf8String strict));
+        Assert.AreEqual("well-formed", strict.ToString());
+
+        //The strict and lossy paths delegate to one intern, so they hand back one interned value.
+        Utf8String lossy = interner.Intern("well-formed");
+        Assert.AreEqual(strict, lossy);
+        Assert.AreEqual(1, interner.Count);
+
+        //Well-formed surrogate pairs transcode fine and take the same path.
+        Assert.IsTrue(interner.TryIntern("emoji \ud83d\ude00", out Utf8String pair));
+        Assert.AreEqual("emoji \ud83d\ude00", pair.ToString());
+        Assert.AreEqual(pair.Memory, interner.Intern("emoji \ud83d\ude00").Memory,
+            "The surrogate-pair value must come back as the one interned backing array.");
+
+        //A string long enough to take the pooled-buffer branch rather than the stackalloc one.
+        string longValue = new('b', 400);
+        Assert.IsTrue(interner.TryIntern(longValue, out Utf8String pooled));
+        Assert.AreEqual(longValue, pooled.ToString());
+        Assert.AreEqual(pooled.Memory, interner.Intern(longValue).Memory,
+            "The pooled-branch value must come back as the one interned backing array.");
+
+        //One entry per distinct value: the surrogate-pair and pooled branches are interned, not merely returned.
+        Assert.AreEqual(3, interner.Count);
+    }
+
+
+    [TestMethod]
+    public void TryInternRejectsNull()
+    {
+        Utf8StringInterner interner = new();
+
+        Assert.ThrowsExactly<ArgumentNullException>(() => interner.TryIntern(null!, out _));
+    }
+
+
+    [TestMethod]
+    public void InternStringReplacesIllFormedUtf16WithReplacementCharacter()
+    {
+        Utf8StringInterner interner = new();
+
+        Utf8String illFormed = interner.Intern("a\ud800b");
+        Utf8String replacement = interner.Intern("a\ufffdb");
+
+        //The lossy contract: Encoding.UTF8's replacement fallback collapses distinct .NET strings onto one value.
+        Assert.AreEqual(replacement, illFormed);
+        Assert.AreEqual("a\ufffdb", illFormed.ToString());
+        Assert.AreEqual(1, interner.Count);
     }
 
 

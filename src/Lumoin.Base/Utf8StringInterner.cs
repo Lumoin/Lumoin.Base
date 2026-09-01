@@ -38,6 +38,11 @@ namespace Lumoin.Base;
 /// blocks and is always valid.
 /// </para>
 /// <para>
+/// <strong>Obtaining one.</strong> <see cref="Shared"/> is a self-creating, process-wide interner on this type's
+/// constructor defaults; <see cref="Instance"/> is the ambient slot an application installs its own interner into;
+/// and a caller wanting a different bound, comparer, value-length cap or meter constructs one directly.
+/// </para>
+/// <para>
 /// <strong>Secrets.</strong> As with <see cref="Utf8StringPool"/>, interning is a poor fit for secrets — a shared
 /// copy is retained until evicted — so hold those in <see cref="SensitiveMemory"/> instead.
 /// </para>
@@ -55,11 +60,36 @@ public sealed class Utf8StringInterner
 {
     /// <summary>
     /// The ambient interner used where an explicit one is not threaded through. The application installs one at
-    /// startup; it is <see langword="null"/> until set, and the library never creates one implicitly. Intended to
-    /// be installed once at startup; the setter is not safe for concurrent reassignment. Do not intern secrets
-    /// through the ambient interner — scope a dedicated one for those.
+    /// startup; this property is <see langword="null"/> until set, and the library never fills it implicitly — a
+    /// self-created bounded default is <see cref="Shared"/>. Intended to be installed once at startup; the setter
+    /// is not safe for concurrent reassignment. Do not intern secrets through the ambient interner — scope a
+    /// dedicated one for those.
     /// </summary>
     public static Utf8StringInterner? Instance { get; set; }
+
+
+    /// <summary>
+    /// Lazy singleton backing the <see cref="Shared"/> property.
+    /// </summary>
+    private static readonly Lazy<Utf8StringInterner> SharedInstance =
+        new(() => new Utf8StringInterner());
+
+    /// <summary>
+    /// Gets a shared singleton instance of the interner.
+    /// </summary>
+    /// <value>A process-wide interner carrying this type's constructor defaults.</value>
+    /// <remarks>
+    /// It always exists: the first access creates it from the parameterless constructor, so it carries this type's
+    /// own documented defaults — a 65,536-entry hot generation, UTF-8 validation on,
+    /// <see cref="Utf8StringComparer.Ordinal"/>, no value-length cap and no meter. It is safe for concurrent use
+    /// from any number of threads and is never disposed. Its bound is on entries, not bytes: the live set holds
+    /// about 131,072 values and each interned value is retained whole until evicted, so the retained bytes scale
+    /// with the size of the values interned. Interning large text, or text unique to each call, through this
+    /// process-wide instance therefore retains it — a caller with that shape constructs its own interner with a
+    /// value-length cap, as does one needing a different bound, comparer or meter. Do not intern secrets through
+    /// it — a shared copy is retained until evicted; hold those in <see cref="SensitiveMemory"/> instead.
+    /// </remarks>
+    public static Utf8StringInterner Shared => SharedInstance.Value;
 
 
     /// <summary>The default <see cref="MaxEntries"/> when none is supplied.</summary>
@@ -68,7 +98,7 @@ public sealed class Utf8StringInterner
     /// <summary>The default <see cref="MaxValueLength"/>: no limit, so every value is cacheable.</summary>
     private const int DefaultMaxValueLength = int.MaxValue;
 
-    /// <summary>Maximum UTF-8 byte count encoded on the stack in <see cref="Intern(string)"/>.</summary>
+    /// <summary>Maximum UTF-8 byte count encoded on the stack in <see cref="Intern(string)"/> and <see cref="TryIntern(string, out Utf8String)"/>.</summary>
     private const int MaxStackallocBytes = 256;
 
     /// <summary>The hot-generation capacity that triggers a rotation; the live set is bounded to about twice this.</summary>
@@ -230,7 +260,13 @@ public sealed class Utf8StringInterner
     }
 
 
-    /// <summary>Interns a .NET string by encoding it as UTF-8.</summary>
+    /// <summary>
+    /// Interns a .NET string by encoding it as UTF-8. The encoding is lossy for ill-formed UTF-16: an unpaired
+    /// surrogate is replaced with U+FFFD by <see cref="System.Text.Encoding.UTF8"/>'s replacement fallback, so this
+    /// method never throws for it, and two distinct .NET strings that differ only in ill-formed surrogates intern to
+    /// one <see cref="Utf8String"/>. <see cref="TryIntern(string, out Utf8String)"/> is the strict path that reports
+    /// ill-formed UTF-16 instead of replacing it.
+    /// </summary>
     /// <param name="value">The string to intern.</param>
     /// <returns>An interned <see cref="Utf8String"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
@@ -253,6 +289,76 @@ public sealed class Utf8StringInterner
             int written = System.Text.Encoding.UTF8.GetBytes(value, rented);
 
             return Intern(rented.AsSpan(0, written));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+
+    /// <summary>
+    /// Interns a .NET string by encoding it as UTF-8, succeeding only when the string is well-formed UTF-16. The
+    /// strict counterpart to <see cref="Intern(string)"/>: an unpaired surrogate is reported rather than replaced
+    /// with U+FFFD, so distinct strings never collapse onto one interned value through this path. Ill-formed input
+    /// is data, not a programming error, so it returns <see langword="false"/> rather than throwing.
+    /// </summary>
+    /// <param name="value">The string to intern.</param>
+    /// <param name="result">On success, the interned <see cref="Utf8String"/>; otherwise <see cref="Utf8String.Empty"/>.</param>
+    /// <returns><see langword="true"/> when <paramref name="value"/> is well-formed UTF-16 and was interned.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>. A null argument is a programming error rather than input data, so it throws where ill-formed UTF-16 returns <see langword="false"/>.</exception>
+    public bool TryIntern(string value, out Utf8String result)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        int maxByteCount = System.Text.Encoding.UTF8.GetMaxByteCount(value.Length);
+        if(maxByteCount <= MaxStackallocBytes)
+        {
+            Span<byte> buffer = stackalloc byte[maxByteCount];
+
+            //Transcoding without replacement reports ill-formed UTF-16 through the status instead of substituting
+            //U+FFFD, and the bytes it does produce are well-formed UTF-8, so the delegated intern cannot reject them.
+            OperationStatus stackStatus = System.Text.Unicode.Utf8.FromUtf16(
+                value,
+                buffer,
+                out _,
+                out int stackWritten,
+                replaceInvalidSequences: false,
+                isFinalBlock: true);
+
+            if(stackStatus != OperationStatus.Done)
+            {
+                result = Utf8String.Empty;
+
+                return false;
+            }
+
+            result = Intern(buffer[..stackWritten]);
+
+            return true;
+        }
+
+        byte[] rented = ArrayPool<byte>.Shared.Rent(maxByteCount);
+        try
+        {
+            OperationStatus rentedStatus = System.Text.Unicode.Utf8.FromUtf16(
+                value,
+                rented,
+                out _,
+                out int rentedWritten,
+                replaceInvalidSequences: false,
+                isFinalBlock: true);
+
+            if(rentedStatus != OperationStatus.Done)
+            {
+                result = Utf8String.Empty;
+
+                return false;
+            }
+
+            result = Intern(rented.AsSpan(0, rentedWritten));
+
+            return true;
         }
         finally
         {
