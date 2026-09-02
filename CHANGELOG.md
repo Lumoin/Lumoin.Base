@@ -53,6 +53,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `validateOnIntern: false`), OpenTelemetry metrics via `Utf8StringPoolMetrics`, and an optional static,
   application-installed `Instance` ambient pool (the library never creates one implicitly). Materialization is
   pool-only — there is no heap-allocating factory; `Utf8String` either views caller memory or is interned.
+  Every member reads as disposed once the pool is: `Count` throws `ObjectDisposedException` like `Intern`,
+  `TryGet` and `Reset`, and the observable instruments publish no measurement rather than a zero.
 - `Utf8StringPool.Reset()`: bulk-reclaims all interned memory and clears the table so the pool can be reused
   without being recreated, with the same "no live views" contract as disposal — a cheap shrink for scoped reuse.
 - `Utf8StringInterner`: a process-wide, thread-safe interner for recurring UTF-8 bytes and .NET strings — the

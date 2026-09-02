@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics.Metrics;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -361,6 +362,51 @@ public sealed class Utf8StringPoolTests
         //And the reset pool itself still works.
         Assert.AreEqual("after", interner.Intern("after"u8).ToString());
         interner.Dispose();
+    }
+
+
+    [TestMethod]
+    public void CountAfterDisposeThrows()
+    {
+        Utf8StringPool pool = new();
+        pool.Intern("term"u8);
+        pool.Dispose();
+
+        //Count answered on a disposed pool would report a cleared table as a healthy zero; it throws like
+        //every other member instead, so a use-after-dispose surfaces where it happens.
+        Assert.ThrowsExactly<ObjectDisposedException>(() => _ = pool.Count);
+    }
+
+
+    [TestMethod]
+    public void DisposedPoolPublishesNoObservableMeasurements()
+    {
+        using Meter meter = new("Test.Utf8StringPool.DisposedMetrics");
+        int measurements = 0;
+        using MeterListener listener = new();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if(instrument.Meter == meter)
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<int>((_, _, _, _) => measurements++);
+        listener.SetMeasurementEventCallback<long>((_, _, _, _) => measurements++);
+        listener.Start();
+
+        Utf8StringPool pool = new(BaseMemoryPool.Shared, meter: meter);
+        pool.Intern("term"u8);
+        listener.RecordObservableInstruments();
+        Assert.IsGreaterThanOrEqualTo(1, measurements, "A live pool must publish its observable instruments.");
+
+        pool.Dispose();
+        measurements = 0;
+        listener.RecordObservableInstruments();
+
+        //The callbacks are registered on a meter the pool does not own, so they outlive it and cannot be
+        //unregistered; publishing nothing keeps a dead pool from reporting a healthy zero forever.
+        Assert.AreEqual(0, measurements, "A disposed pool must publish no measurement.");
     }
 
 

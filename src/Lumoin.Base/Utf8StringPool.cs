@@ -173,15 +173,18 @@ public sealed class Utf8StringPool: IDisposable
                 "operations",
                 "Intern cache hit count (existing value returned).");
 
+            //A disposed pool publishes no measurement rather than a healthy-looking zero: the series
+            //stops where the pool stops. The callback is registered on a meter this type does not own,
+            //so it outlives disposal and there is no way to unregister it.
             meter.CreateObservableUpDownCounter(
                 Utf8StringPoolMetrics.UniqueCount,
-                () => Table.Count,
+                () => Disposed ? [] : (IEnumerable<Measurement<int>>)[new Measurement<int>(Table.Count)],
                 "strings",
                 "Number of unique values interned in the pool.");
 
             meter.CreateObservableUpDownCounter(
                 Utf8StringPoolMetrics.TotalBytesInterned,
-                () => TotalBytesInterned,
+                () => Disposed ? [] : (IEnumerable<Measurement<long>>)[new Measurement<long>(TotalBytesInterned)],
                 "bytes",
                 "Total bytes interned in the pool.");
         }
@@ -189,7 +192,16 @@ public sealed class Utf8StringPool: IDisposable
 
 
     /// <summary>Gets the number of unique values interned in this pool.</summary>
-    public int Count => Table.Count;
+    /// <exception cref="ObjectDisposedException">The pool has been disposed.</exception>
+    public int Count
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(Disposed, this);
+
+            return Table.Count;
+        }
+    }
 
 
     /// <summary>Gets the total bytes interned. Test/diagnostic accessor.</summary>
