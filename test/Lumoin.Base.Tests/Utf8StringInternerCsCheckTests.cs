@@ -73,9 +73,7 @@ public sealed class Utf8StringInternerCsCheckTests
         Gen.Select(Gen.Int[1, 16], WellFormedText.Array[1, 64]).Sample(generated =>
         {
             (int maxEntries, string[] values) = generated;
-
             Utf8StringInterner interner = new(maxEntries: maxEntries);
-
             foreach(string value in values)
             {
                 Utf8String first = interner.Intern(value);
@@ -108,7 +106,6 @@ public sealed class Utf8StringInternerCsCheckTests
         Gen.Select(WellFormedText, Gen.Int[0xD800, 0xDFFF], WellFormedText).Sample(generated =>
         {
             (string prefix, int surrogate, string suffix) = generated;
-
             Utf8StringInterner interner = new();
             string illFormed = prefix + (char)surrogate + suffix;
 

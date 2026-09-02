@@ -375,7 +375,6 @@ public sealed class Utf8StringInternerTests
         {
             Utf8StringInterner ambient = new();
             Utf8StringInterner.Instance = ambient;
-
             Utf8StringInterner shared = Utf8StringInterner.Shared;
 
             //The ambient slot is an application's own installation; Shared is the self-created default beside it.
