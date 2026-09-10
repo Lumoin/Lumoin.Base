@@ -50,7 +50,7 @@ public sealed class LibsodiumAeadAndKemTests
         Span<byte> decrypted = stackalloc byte[message.Length];
         Assert.AreEqual(0, LibsodiumCrypto.AeadXChaCha20Poly1305Decrypt(decrypted, ciphertext, associatedData, nonce, key),
             "Decryption with the right key, nonce and associated data should succeed.");
-        Assert.IsTrue(decrypted.SequenceEqual(message), "The round-tripped plaintext must match.");
+        Assert.AreSequenceEqual(message, decrypted, "The round-tripped plaintext must match.");
     }
 
 
@@ -116,7 +116,7 @@ public sealed class LibsodiumAeadAndKemTests
         byte[] publicKeyAgain = new byte[LibsodiumCrypto.MlKem768PublicKeyLength];
         Assert.AreEqual(0, LibsodiumCrypto.MlKem768SeedKeypair(publicKey, secretKey, seed), "Seed keypair derivation should succeed.");
         Assert.AreEqual(0, LibsodiumCrypto.MlKem768SeedKeypair(publicKeyAgain, secretKey, seed), "Repeated derivation should succeed.");
-        Assert.IsTrue(publicKey.AsSpan().SequenceEqual(publicKeyAgain), "Seed keypair derivation must be deterministic.");
+        Assert.AreSequenceEqual(publicKeyAgain, publicKey, "Seed keypair derivation must be deterministic.");
 
         Span<byte> ciphertext = stackalloc byte[LibsodiumCrypto.MlKem768CiphertextLength];
         Span<byte> encapsulated = stackalloc byte[LibsodiumCrypto.MlKem768SharedSecretLength];
@@ -124,7 +124,7 @@ public sealed class LibsodiumAeadAndKemTests
 
         Span<byte> decapsulated = stackalloc byte[LibsodiumCrypto.MlKem768SharedSecretLength];
         Assert.AreEqual(0, LibsodiumCrypto.MlKem768Decapsulate(decapsulated, ciphertext, secretKey), "Decapsulation should succeed.");
-        Assert.IsTrue(decapsulated.SequenceEqual(encapsulated), "Both sides must derive the same shared secret.");
+        Assert.AreSequenceEqual(encapsulated, decapsulated, "Both sides must derive the same shared secret.");
 
         //FIPS 203 implicit rejection: a tampered ciphertext still decapsulates with return code 0,
         //but the derived secret must silently differ from the encapsulator's.
@@ -159,7 +159,7 @@ public sealed class LibsodiumAeadAndKemTests
         byte[] publicKeyAgain = new byte[LibsodiumCrypto.XWingPublicKeyLength];
         Assert.AreEqual(0, LibsodiumCrypto.XWingSeedKeypair(publicKey, secretKey, seed), "Seed keypair derivation should succeed.");
         Assert.AreEqual(0, LibsodiumCrypto.XWingSeedKeypair(publicKeyAgain, secretKey, seed), "Repeated derivation should succeed.");
-        Assert.IsTrue(publicKey.AsSpan().SequenceEqual(publicKeyAgain), "Seed keypair derivation must be deterministic.");
+        Assert.AreSequenceEqual(publicKeyAgain, publicKey, "Seed keypair derivation must be deterministic.");
 
         Span<byte> ciphertext = stackalloc byte[LibsodiumCrypto.XWingCiphertextLength];
         Span<byte> encapsulated = stackalloc byte[LibsodiumCrypto.XWingSharedSecretLength];
@@ -167,7 +167,7 @@ public sealed class LibsodiumAeadAndKemTests
 
         Span<byte> decapsulated = stackalloc byte[LibsodiumCrypto.XWingSharedSecretLength];
         Assert.AreEqual(0, LibsodiumCrypto.XWingDecapsulate(decapsulated, ciphertext, secretKey), "Decapsulation should succeed.");
-        Assert.IsTrue(decapsulated.SequenceEqual(encapsulated), "Both sides must derive the same shared secret.");
+        Assert.AreSequenceEqual(encapsulated, decapsulated, "Both sides must derive the same shared secret.");
 
         ciphertext[0] ^= 0x01;
         Span<byte> rejected = stackalloc byte[LibsodiumCrypto.XWingSharedSecretLength];

@@ -1,7 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Metrics;
 using System.Runtime.CompilerServices;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -9,8 +8,9 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace Lumoin.Base.Tests;
 
 /// <summary>
-/// Behavioral and concurrency tests for <see cref="BaseMemoryPool"/>, migrated from the
-/// SensitiveMemoryPool suite and extended with the <see cref="AllocationKind"/> dimension.
+/// Behavioral and concurrency tests for <see cref="BaseMemoryPool"/> across the <see cref="AllocationKind"/>
+/// dimension: exact-size rents, zeroize-on-return, native backing injection and strict degradation,
+/// <c>TrimExcess</c>, lifecycle tracing and metrics, and cross-thread rent/return.
 /// </summary>
 [TestClass]
 public sealed class BaseMemoryPoolTests
@@ -29,6 +29,20 @@ public sealed class BaseMemoryPoolTests
         public Memory<byte> Memory => buffer;
 
         public void Dispose() => Array.Clear(buffer);
+    }
+
+
+    /// <summary>
+    /// A backing owner whose Dispose always throws, standing in for a misbehaving native backing (a
+    /// third-party allocator, or a locked-memory release that fails).
+    /// </summary>
+    private sealed class ThrowingOnDisposeOwner(int size): IMemoryOwner<byte>
+    {
+        private readonly byte[] buffer = new byte[size];
+
+        public Memory<byte> Memory => buffer;
+
+        public void Dispose() => throw new InvalidOperationException("Simulated backing dispose failure.");
     }
 
 
@@ -51,21 +65,6 @@ public sealed class BaseMemoryPoolTests
     private static BaseMemoryPool NewWiredPool()
     {
         return new BaseMemoryPool(CountingBacking(new StrongBox<int>(0)));
-    }
-
-
-    [TestMethod]
-    public void RentReturnsExactBufferSize()
-    {
-        using var pool = new BaseMemoryPool();
-
-        int[] testSizes = [1, 16, 32, 64, 128, 256, 512, 1024];
-
-        foreach(int size in testSizes)
-        {
-            using var buffer = pool.Rent(size);
-            Assert.HasCount(size, buffer.Memory, $"Buffer size should be exactly {size} bytes.");
-        }
     }
 
 
@@ -167,19 +166,6 @@ public sealed class BaseMemoryPoolTests
 
 
     [TestMethod]
-    public void DisposeClearsMemoryAndPreventsAccess()
-    {
-        using var pool = new BaseMemoryPool();
-        var buffer = pool.Rent(32);
-
-        buffer.Memory.Span.Fill(0xFF);
-        buffer.Dispose();
-
-        Assert.ThrowsExactly<ObjectDisposedException>(() => _ = buffer.Memory);
-    }
-
-
-    [TestMethod]
     public void DoubleDisposeIsIdempotent()
     {
         using var pool = new BaseMemoryPool();
@@ -194,32 +180,9 @@ public sealed class BaseMemoryPoolTests
 
 
     [TestMethod]
-    public void ReturnedMemoryIsZeroed()
-    {
-        using var meter = new Meter("Test", "1.0.0");
-        using var pool = new BaseMemoryPool(
-            meter,
-            capacityStrategy: _ => 1);
-
-        //Rent, fill with a recognizable pattern, and return.
-        var first = pool.Rent(32);
-        first.Memory.Span.Fill(0xDE);
-        first.Dispose();
-
-        //Rent again from the same slab and verify the memory is zeroed.
-        using var second = pool.Rent(32);
-        foreach(byte b in second.Memory.Span)
-        {
-            Assert.AreEqual(0, b, "Returned memory must be zeroed for security.");
-        }
-    }
-
-
-    [TestMethod]
     [DataRow(AllocationKind.Managed)]
     [DataRow(AllocationKind.Pinned)]
     [DataRow(AllocationKind.Native)]
-    [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Ownership of the Meter transfers to the BaseMemoryPool, which disposes it when the using-scoped pool is disposed.")]
     public void ReturnedMemoryIsZeroedForKind(AllocationKind kind)
     {
         //Wire a native backing whose stand-in owner clears on dispose, so the Native row holds the
@@ -236,10 +199,7 @@ public sealed class BaseMemoryPoolTests
 
         //Rent again (same size + kind reuses the slab segment for the pooled kinds) and verify zeroed.
         using var second = pool.Rent(32, kind);
-        foreach(byte b in second.Memory.Span)
-        {
-            Assert.AreEqual(0, b, $"Returned memory must be zeroed for security ({kind}).");
-        }
+        Assert.AreEqual(-1, second.Memory.Span.IndexOfAnyExcept((byte)0), $"Returned memory must be zeroed for security ({kind}).");
     }
 
 
@@ -343,6 +303,148 @@ public sealed class BaseMemoryPoolTests
 
 
     [TestMethod]
+    public void DisposingRentalAfterPoolDisposedRecordsErrorStatusOnActivity()
+    {
+        //Disposing the pool disposes the managed Slab too, so returning the still-outstanding rental hits
+        //SlabMemoryOwner.Dispose's catch(ObjectDisposedException): the lifecycle activity must record the
+        //error status and description the code sets there, and the owner dispose itself must not throw.
+        Activity.Current = null;
+
+        using var testRoot = new Activity(nameof(DisposingRentalAfterPoolDisposedRecordsErrorStatusOnActivity));
+        testRoot.Start();
+        var testTraceId = testRoot.TraceId;
+
+        var activities = new List<Activity>();
+
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BaseMemoryPool",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = activity =>
+            {
+                if(activity.TraceId == testTraceId)
+                {
+                    activities.Add(activity);
+                }
+            }
+        };
+
+        ActivitySource.AddActivityListener(activityListener);
+
+        var pool = new BaseMemoryPool();
+        var owner = pool.Rent(32);
+
+        pool.Dispose();
+
+        //Must not throw: the ObjectDisposedException from the disposed Slab is caught internally.
+        owner.Dispose();
+
+        testRoot.Stop();
+
+        var rentActivity = activities.FirstOrDefault(a => a.OperationName == "Rent");
+        Assert.IsNotNull(rentActivity, "Should have captured the Rent lifecycle activity.");
+        Assert.AreEqual(ActivityStatusCode.Error, rentActivity.Status,
+            "A return against an already-disposed slab must record an error status on the lifecycle activity.");
+        Assert.IsFalse(string.IsNullOrEmpty(rentActivity.StatusDescription),
+            "The error status must carry the caught ObjectDisposedException's message as its description.");
+        Assert.Contains("disposed", rentActivity.StatusDescription!, "The description should name the disposed-object failure.");
+
+        //A second dispose must remain safe even after the catch path already ran.
+        owner.Dispose();
+    }
+
+
+    [TestMethod]
+    public void DisposingNativeRentalAfterPoolDisposedRecordsOkStatusOnActivity()
+    {
+        //Per-rent isolated native rentals are never slab-pooled, so pool disposal does not touch them: the
+        //owner's Dispose runs Inner.Dispose() and then Pool.ReturnNative(), which only records the return
+        //counter, and a disposed meter ignores that measurement. The happy path runs to completion and the
+        //lifecycle activity records Ok with no description.
+        Activity.Current = null;
+
+        using var testRoot = new Activity(nameof(DisposingNativeRentalAfterPoolDisposedRecordsOkStatusOnActivity));
+        testRoot.Start();
+        var testTraceId = testRoot.TraceId;
+
+        var activities = new List<Activity>();
+
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BaseMemoryPool",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = activity =>
+            {
+                if(activity.TraceId == testTraceId)
+                {
+                    activities.Add(activity);
+                }
+            }
+        };
+
+        ActivitySource.AddActivityListener(activityListener);
+
+        var pool = NewWiredPool();
+        var owner = pool.Rent(32, AllocationKind.Native);
+
+        pool.Dispose();
+
+        owner.Dispose();
+
+        testRoot.Stop();
+
+        var rentActivity = activities.FirstOrDefault(a => a.OperationName == "Rent");
+        Assert.IsNotNull(rentActivity, "Should have captured the Rent lifecycle activity.");
+        Assert.AreEqual(ActivityStatusCode.Ok, rentActivity.Status,
+            "A per-rent isolated native return after pool disposal completes normally and records Ok.");
+        Assert.IsNull(rentActivity.StatusDescription, "The Ok status is set without a description.");
+
+        //A second dispose must remain safe.
+        owner.Dispose();
+    }
+
+
+    [TestMethod]
+    public void ThrowingNativeBackingDisposePropagatesButStillMarksOwnerDisposed()
+    {
+        //A backing owner whose own Dispose throws: NativeMemoryOwner.Dispose's outer catch(Exception) records
+        //an error status and rethrows, but the finally still marks the owner disposed — so a caller that
+        //observes and swallows the exception is left with a safely-disposed owner, not a half-open one.
+        //Per-rent isolated native rentals never increment the active-rentals metric in the first place (only
+        //the pooled/protected-slab tiers do), so it must read zero both before and after this failure.
+        using var meter = new Meter(BaseMemoryPoolMetrics.MeterName, "1.0.0");
+        int activeRentals = -1;
+
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if(instrument.Meter == meter && instrument.Name == BaseMemoryPoolMetrics.BaseMemoryPoolActiveRentals)
+            {
+                meterListener.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<int>((instrument, measurement, tags, state) =>
+        {
+            activeRentals = measurement;
+        });
+        listener.Start();
+
+        using var pool = new BaseMemoryPool(meter, nativeBacking: size => new ThrowingOnDisposeOwner(size));
+        var owner = pool.Rent(32, AllocationKind.Native);
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => owner.Dispose());
+
+        Assert.ThrowsExactly<ObjectDisposedException>(() => _ = owner.Memory,
+            "The finally block must mark the owner disposed even though Dispose itself threw.");
+
+        listener.RecordObservableInstruments();
+
+        Assert.AreEqual(0, activeRentals,
+            "Per-rent isolated native rentals never increment the active-rentals metric, so it stays at zero.");
+    }
+
+
+    [TestMethod]
     public void TrimExcessThrowsWhenPoolDisposed()
     {
         var pool = new BaseMemoryPool();
@@ -376,6 +478,20 @@ public sealed class BaseMemoryPoolTests
             "Small buffers should get more segments per slab than medium buffers.");
         Assert.IsGreaterThan(largeCapacity, mediumCapacity,
             "Medium buffers should get more segments per slab than large buffers.");
+    }
+
+
+    [TestMethod]
+    [DataRow(64, 32)]
+    [DataRow(65, 16)]
+    [DataRow(256, 16)]
+    [DataRow(257, 8)]
+    [DataRow(4096, 8)]
+    [DataRow(4097, 4)]
+    public void DefaultCapacityStrategyTierBoundaries(int segmentSize, int expectedCapacity)
+    {
+        Assert.AreEqual(expectedCapacity, BaseMemoryPool.DefaultCapacityStrategy(segmentSize),
+            $"Segment size {segmentSize} should fall in the tier that yields {expectedCapacity} segments per slab.");
     }
 
 
@@ -540,7 +656,6 @@ public sealed class BaseMemoryPoolTests
 
 
     [TestMethod]
-    [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Analyzer false positive on testRoot.")]
     public void DegradedNativeRentReportsEffectiveKindAndEmitsEvent()
     {
         //A default (degrading) pool with no backing wired must record the EFFECTIVE kind (Pinned) on the
@@ -583,21 +698,41 @@ public sealed class BaseMemoryPoolTests
         Assert.AreEqual("Native", rentActivity.GetTagItem("requestedAllocationKind")?.ToString(),
             "Telemetry must preserve the originally requested kind (Native).");
 
-        bool hasDegradedEvent = rentActivity.Events.Any(e => e.Name == "AllocationKindDegraded");
-        Assert.IsTrue(hasDegradedEvent, "A degraded Native rent must emit an AllocationKindDegraded event.");
+        Assert.Contains(e => e.Name == "AllocationKindDegraded", rentActivity.Events, "A degraded Native rent must emit an AllocationKindDegraded event.");
+
+        ActivityEvent degradationEvent = rentActivity.Events.First(e => e.Name == "AllocationKindDegraded");
+        Assert.Contains(new KeyValuePair<string, object?>("requested", "Native"), degradationEvent.Tags,
+            "The degradation event must tag the originally requested kind.");
+        Assert.Contains(new KeyValuePair<string, object?>("effective", "Pinned"), degradationEvent.Tags,
+            "The degradation event must tag the effective kind actually served.");
     }
 
 
     [TestMethod]
     public void TracingCanBeDisabled()
     {
+        //The BaseMemoryPool ActivitySource is process-wide, so test classes running in parallel start
+        //Rent activities of their own; only activities under this test's trace count as evidence.
+        Activity.Current = null;
+
+        using var testRoot = new Activity(nameof(TracingCanBeDisabled));
+        testRoot.Start();
+        var testTraceId = testRoot.TraceId;
+
         var activities = new ConcurrentBag<Activity>();
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == "BaseMemoryPool",
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStarted = activity => activities.Add(activity)
+            ActivityStarted = activity =>
+            {
+                if(activity.TraceId == testTraceId)
+                {
+                    activities.Add(activity);
+                }
+            }
         };
+
         ActivitySource.AddActivityListener(listener);
 
         using var meter = new Meter("Test", "1.0.0");
@@ -606,6 +741,8 @@ public sealed class BaseMemoryPoolTests
             tracingEnabled: false);
 
         using(pool.Rent(32)) { }
+
+        testRoot.Stop();
 
         Assert.IsEmpty(activities,
             "No activities should be created when tracing is disabled.");
@@ -649,12 +786,12 @@ public sealed class BaseMemoryPoolTests
                 listener.RecordObservableInstruments();
                 await Task.Delay(TimeSpan.FromMilliseconds(10), TestContext.CancellationToken).ConfigureAwait(false);
 
-                bool foundSlabs = reportedMetrics.TryGetValue(BaseMemoryPoolMetrics.BaseMemoryPoolTotalSlabs, out long totalSlabs);
-                Assert.IsTrue(foundSlabs, "TotalSlabs metric should be reported.");
+                bool isTotalSlabsReported = reportedMetrics.TryGetValue(BaseMemoryPoolMetrics.BaseMemoryPoolTotalSlabs, out long totalSlabs);
+                Assert.IsTrue(isTotalSlabsReported, "TotalSlabs metric should be reported.");
                 Assert.AreEqual(2, totalSlabs, "Should have created two slabs for different buffer sizes.");
 
-                bool foundMemory = reportedMetrics.TryGetValue(BaseMemoryPoolMetrics.BaseMemoryPoolTotalMemoryAllocated, out long totalMemory);
-                Assert.IsTrue(foundMemory, "TotalMemoryAllocated metric should be reported.");
+                bool isTotalMemoryReported = reportedMetrics.TryGetValue(BaseMemoryPoolMetrics.BaseMemoryPoolTotalMemoryAllocated, out long totalMemory);
+                Assert.IsTrue(isTotalMemoryReported, "TotalMemoryAllocated metric should be reported.");
 
                 //Expected memory uses the default capacity strategy.
                 int expectedCapacity100 = BaseMemoryPool.DefaultCapacityStrategy(100);
@@ -667,7 +804,77 @@ public sealed class BaseMemoryPoolTests
 
 
     [TestMethod]
-    [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Analyzer false positive on testRoot.")]
+    public async Task MetricsReturnToBaselineAfterReturnAndTrimExcess()
+    {
+        using var meter = new Meter(BaseMemoryPoolMetrics.MeterName, "1.0.0");
+        var reportedMetrics = new ConcurrentDictionary<string, long>();
+        long returnOperationsTotal = 0;
+
+        using var listener = new MeterListener();
+
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if(instrument.Meter == meter)
+            {
+                meterListener.EnableMeasurementEvents(instrument);
+            }
+        };
+
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
+        {
+            if(instrument.Name == BaseMemoryPoolMetrics.BaseMemoryPoolReturnOperationsTotal)
+            {
+                returnOperationsTotal += measurement;
+
+                return;
+            }
+
+            reportedMetrics.AddOrUpdate(instrument.Name, measurement, (_, _) => measurement);
+        });
+
+        listener.SetMeasurementEventCallback<int>((instrument, measurement, tags, state) =>
+        {
+            reportedMetrics.AddOrUpdate(instrument.Name, measurement, (_, _) => measurement);
+        });
+
+        listener.Start();
+
+        using var pool = new BaseMemoryPool(meter);
+
+        //Two different sizes force two distinct slabs, mirroring MetricsAreReportedCorrectly.
+        var first = pool.Rent(100);
+        var second = pool.Rent(200);
+
+        listener.RecordObservableInstruments();
+        await Task.Delay(TimeSpan.FromMilliseconds(10), TestContext.CancellationToken).ConfigureAwait(false);
+
+        Assert.AreEqual(2L, reportedMetrics[BaseMemoryPoolMetrics.BaseMemoryPoolActiveRentals],
+            "Two live rentals should report two active rentals.");
+
+        first.Dispose();
+        second.Dispose();
+
+        listener.RecordObservableInstruments();
+        await Task.Delay(TimeSpan.FromMilliseconds(10), TestContext.CancellationToken).ConfigureAwait(false);
+
+        Assert.AreEqual(0L, reportedMetrics[BaseMemoryPoolMetrics.BaseMemoryPoolActiveRentals],
+            "Returning every rental should bring active rentals back to zero.");
+        Assert.AreEqual(2L, returnOperationsTotal, "Each returned rental must record a return operation.");
+
+        int reclaimed = pool.TrimExcess();
+        Assert.IsGreaterThan(0, reclaimed, "TrimExcess should reclaim the now-idle slabs.");
+
+        listener.RecordObservableInstruments();
+        await Task.Delay(TimeSpan.FromMilliseconds(10), TestContext.CancellationToken).ConfigureAwait(false);
+
+        Assert.AreEqual(0L, reportedMetrics[BaseMemoryPoolMetrics.BaseMemoryPoolTotalSlabs],
+            "TrimExcess should reclaim every idle slab, bringing TotalSlabs back to zero.");
+        Assert.AreEqual(0L, reportedMetrics[BaseMemoryPoolMetrics.BaseMemoryPoolTotalMemoryAllocated],
+            "TrimExcess should release every idle slab's backing memory, bringing TotalMemoryAllocated back to zero.");
+    }
+
+
+    [TestMethod]
     public void TracingRecordsSingleLifecycleActivityPerRental()
     {
         Activity.Current = null;
@@ -710,8 +917,7 @@ public sealed class BaseMemoryPoolTests
         Assert.IsNotNull(secondRent, "Should have lifecycle activity for 200-byte buffer.");
 
         //No separate dispose activities should exist.
-        var disposeActivities = activities.Where(a => a.OperationName == "Dispose").ToList();
-        Assert.HasCount(0, disposeActivities,
+        Assert.DoesNotContain(a => a.OperationName == "Dispose", activities,
             "Single-activity model should not create separate dispose activities.");
     }
 

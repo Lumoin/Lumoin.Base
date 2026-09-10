@@ -31,8 +31,8 @@ public sealed class SodiumBackingTests
     [TestMethod]
     public void AllocateAndAvailabilityAgree()
     {
-        //The two branches partition every host, so this test always exercises real behavior — it is
-        //the one guaranteed to run unconditionally even on a bare CI machine without libsodium.
+        //The two branches partition every host, so this test always exercises real allocation
+        //behavior: on a host without libsodium it proves the unavailability path instead of skipping.
         if(SodiumBacking.IsAvailable)
         {
             using var owner = SodiumBacking.Allocate(16);
@@ -135,6 +135,29 @@ public sealed class SodiumBackingTests
 
         using(manager.Pin(0)) { }
         using(manager.Pin(64)) { }
+    }
+
+
+    [TestMethod]
+    public unsafe void PinAtANonZeroOffsetAddressesThatByte()
+    {
+        LibsodiumTestEnvironment.RequireSodium();
+
+        using var owner = SodiumBacking.Allocate(64);
+        var manager = (MemoryManager<byte>)owner;
+
+        //Fill through GetSpan with a position-dependent pattern so each byte is distinguishable.
+        Span<byte> span = manager.GetSpan();
+        for(int i = 0; i < span.Length; i++)
+        {
+            span[i] = (byte)i;
+        }
+
+        const int offset = 40;
+        using MemoryHandle handle = manager.Pin(offset);
+
+        byte* pointer = (byte*)handle.Pointer;
+        Assert.AreEqual((byte)offset, pointer[0], "Pin(N) must address byte N, not byte 0.");
     }
 
 
@@ -252,8 +275,7 @@ public sealed class SodiumBackingTests
         Assert.IsNull(rentActivity.GetTagItem("requestedAllocationKind"),
             "A non-degraded Native rent must not carry a requestedAllocationKind tag.");
 
-        bool hasDegradedEvent = rentActivity.Events.Any(e => e.Name == "AllocationKindDegraded");
-        Assert.IsFalse(hasDegradedEvent, "A non-degraded Native rent must not emit an AllocationKindDegraded event.");
+        Assert.DoesNotContain(e => e.Name == "AllocationKindDegraded", rentActivity.Events, "A non-degraded Native rent must not emit an AllocationKindDegraded event.");
     }
 
 

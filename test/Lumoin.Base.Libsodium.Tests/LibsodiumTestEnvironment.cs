@@ -1,8 +1,10 @@
 // Family provenance rule (no middleman binaries): the libsodium native library consumed by this
-// binding is never a third-party repackaging (libsodium NuGet, NSec, LibSodium.Net). Until
-// family-built native asset packages exist, LUMOIN_SODIUM_LIBRARY is the interim dev-loop knob — it
-// points at a libsodium built locally from pinned upstream source, and nothing produced by that local
-// build is ever published.
+// binding is never a third-party repackaging (libsodium NuGet, NSec, LibSodium.Net); the binaries
+// ship inside Lumoin.Base.Libsodium, built by main.yml's natives jobs from pinned upstream source.
+// LUMOIN_SODIUM_LIBRARY points this suite at one specific libsodium binary: the host natives jobs
+// (win/linux/osx) set it to the binary they just built so the suite proves it before packing
+// (skipped: 0 is the gate; the cross-compiled Android and Apple binaries ship on provenance instead),
+// and a developer sets it to a local build from the same pinned source.
 
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -11,17 +13,17 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace Lumoin.Base.Libsodium.Tests;
 
 /// <summary>
-/// Assembly-wide libsodium resolution hook (so a locally built library can be pointed at via
-/// <c>LUMOIN_SODIUM_LIBRARY</c> without shipping a native asset) and the shared inconclusive-skip
+/// Assembly-wide libsodium resolution hook (so one specific libsodium binary can be pointed at via
+/// <c>LUMOIN_SODIUM_LIBRARY</c> ahead of the default probing) and the shared inconclusive-skip
 /// helper other test classes call when a test needs the real native library.
 /// </summary>
 [TestClass]
 public static class LibsodiumTestEnvironment
 {
-    //Probes availability at most once per process. LibsodiumCrypto's initialization gate is a static
-    //constructor, so a failed probe is sticky for the whole process either way; caching it here just
-    //avoids re-throwing through the type initializer on every RequireSodium call.
-    private static readonly Lazy<bool> Available = new(ProbeAvailability);
+    //Probes availability at most once per process. LibsodiumCrypto's initialization gate is its
+    //beforefieldinit type initializer, so a failed sodium_init is sticky for the whole process either
+    //way; caching here just avoids re-throwing through the type initializer on every RequireSodium call.
+    private static Lazy<bool> IsAvailable { get; } = new(ProbeAvailability);
 
 
     [AssemblyInitialize]
@@ -55,17 +57,17 @@ public static class LibsodiumTestEnvironment
     /// </summary>
     public static void RequireSodium()
     {
-        if(!Available.Value)
+        if(!IsAvailable.Value)
         {
             Assert.Inconclusive("libsodium native library is not available on this host; set LUMOIN_SODIUM_LIBRARY to a locally built libsodium to run this test.");
         }
     }
 
 
-    //The first touch of any LibsodiumCrypto static member runs its sodium_init static constructor;
-    //when the native library is absent that surfaces as TypeInitializationException (wrapping
-    //DllNotFoundException). The direct exceptions cover a resolver returning a library that is not
-    //libsodium at all.
+    //GetVersionString is a plain P/Invoke that touches no library state, so an absent native library
+    //surfaces directly as DllNotFoundException — or as TypeInitializationException wrapping it when the
+    //runtime chose to run LibsodiumCrypto's beforefieldinit type initializer (sodium_init) first.
+    //EntryPointNotFoundException covers a resolver returning a library that is not libsodium at all.
     private static bool ProbeAvailability()
     {
         try

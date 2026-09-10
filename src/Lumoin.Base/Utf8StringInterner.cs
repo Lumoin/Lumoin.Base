@@ -47,12 +47,14 @@ namespace Lumoin.Base;
 /// copy is retained until evicted — so hold those in <see cref="SensitiveMemory"/> instead.
 /// </para>
 /// <para>
-/// <strong>Untrusted input.</strong> The default <see cref="Utf8StringComparer.Ordinal"/> hash is deterministic, so
-/// interned hashes are stable across processes — but that also makes it predictable, and an adversary feeding
-/// crafted colliding keys can push a generation's bucket toward linear lookups. Two-generation eviction bounds the
-/// damage (the resident set, and so the worst-case collision chain, stays near twice <see cref="MaxEntries"/>), but
-/// for an ambient interner exposed to untrusted input keep <see cref="MaxEntries"/> modest, cap value size with the
-/// constructor's maximum value length, or supply a keyed comparer where cross-process hash stability is not required.
+/// <strong>Untrusted input.</strong> The default <see cref="Utf8StringComparer.Ordinal"/> hash is seeded per
+/// process, so an adversary cannot precompute colliding keys against it. A comparer built from a deterministic
+/// <see cref="Utf8HashFunction"/> trades that away for cross-process stability: its buckets are predictable, and
+/// an adversary feeding crafted colliding keys can push a generation's bucket toward linear lookups. Two-generation
+/// eviction bounds the damage (the resident set, and so the worst-case collision chain, stays near twice
+/// <see cref="MaxEntries"/>), but for an ambient interner exposed to untrusted input keep <see cref="MaxEntries"/>
+/// modest, cap value size with the constructor's maximum value length, and reserve a deterministic comparer for
+/// trusted input or for the case where cross-process hash stability is genuinely required.
 /// </para>
 /// </remarks>
 [DebuggerDisplay("Utf8StringInterner: Count={Count}, MaxEntries={MaxEntries}")]
@@ -71,8 +73,7 @@ public sealed class Utf8StringInterner
     /// <summary>
     /// Lazy singleton backing the <see cref="Shared"/> property.
     /// </summary>
-    private static readonly Lazy<Utf8StringInterner> SharedInstance =
-        new(() => new Utf8StringInterner());
+    private static Lazy<Utf8StringInterner> SharedInstance { get; } = new(() => new Utf8StringInterner());
 
     /// <summary>
     /// Gets a shared singleton instance of the interner.
@@ -123,13 +124,18 @@ public sealed class Utf8StringInterner
     private Counter<long>? RotationsCounter { get; }
 
     /// <summary>Serializes generation rotations so at most one runs at a time.</summary>
-    private object RotationGate { get; } = new();
+    private Lock RotationGate { get; } = new();
 
     /// <summary>
-    /// The hot and cold generations, swapped atomically on rotation. A naked field rather than a property because
-    /// it is published across threads through <see cref="System.Threading.Volatile"/>, which requires by-ref access.
+    /// The hot and cold generations, swapped atomically on rotation. Every read and write goes through
+    /// <see cref="System.Threading.Volatile"/> on the backing field, so a rotation published on one thread is
+    /// observed whole on another.
     /// </summary>
-    private Generations currentGenerations;
+    private Generations CurrentGenerations
+    {
+        get => System.Threading.Volatile.Read(ref field);
+        set => System.Threading.Volatile.Write(ref field, value);
+    }
 
 
     /// <summary>
@@ -155,7 +161,7 @@ public sealed class Utf8StringInterner
         MaxValueLength = maxValueLength;
         ValidateOnIntern = validateOnIntern;
         Comparer = comparer ?? Utf8StringComparer.Ordinal;
-        currentGenerations = new Generations(NewTable(), NewTable());
+        CurrentGenerations = new Generations(NewTable(), NewTable());
 
         if(meter is not null)
         {
@@ -188,7 +194,7 @@ public sealed class Utf8StringInterner
     {
         get
         {
-            Generations generations = System.Threading.Volatile.Read(ref currentGenerations);
+            Generations generations = CurrentGenerations;
 
             return generations.Hot.Count + generations.Cold.Count;
         }
@@ -211,15 +217,15 @@ public sealed class Utf8StringInterner
 
         InternOperationsCounter?.Add(1);
 
-        Generations generations = System.Threading.Volatile.Read(ref currentGenerations);
-        if(generations.Hot.GetAlternateLookup<ReadOnlySpan<byte>>().TryGetValue(utf8Bytes, out Utf8String hot))
+        Generations generations = CurrentGenerations;
+        if(generations.HotByBytes.TryGetValue(utf8Bytes, out Utf8String hot))
         {
             InternHitsCounter?.Add(1);
 
             return hot;
         }
 
-        if(generations.Cold.GetAlternateLookup<ReadOnlySpan<byte>>().TryGetValue(utf8Bytes, out Utf8String cold))
+        if(generations.ColdByBytes.TryGetValue(utf8Bytes, out Utf8String cold))
         {
             InternHitsCounter?.Add(1);
 
@@ -233,8 +239,7 @@ public sealed class Utf8StringInterner
         }
 
         int hash = Comparer.GetHashCode(utf8Bytes);
-        byte[] owned = new byte[utf8Bytes.Length];
-        utf8Bytes.CopyTo(owned);
+        byte[] owned = utf8Bytes.ToArray();
         Utf8String candidate = new(owned, hash);
 
         //An oversized value is returned without caching, so no single outsized value can bloat the resident set.
@@ -373,13 +378,13 @@ public sealed class Utf8StringInterner
     /// <returns><see langword="true"/> when the value is currently interned.</returns>
     public bool TryGet(ReadOnlySpan<byte> utf8Bytes, out Utf8String value)
     {
-        Generations generations = System.Threading.Volatile.Read(ref currentGenerations);
-        if(generations.Hot.GetAlternateLookup<ReadOnlySpan<byte>>().TryGetValue(utf8Bytes, out value))
+        Generations generations = CurrentGenerations;
+        if(generations.HotByBytes.TryGetValue(utf8Bytes, out value))
         {
             return true;
         }
 
-        return generations.Cold.GetAlternateLookup<ReadOnlySpan<byte>>().TryGetValue(utf8Bytes, out value);
+        return generations.ColdByBytes.TryGetValue(utf8Bytes, out value);
     }
 
 
@@ -392,7 +397,7 @@ public sealed class Utf8StringInterner
         //Serialize with Rotate so a rotation in flight cannot overwrite the cleared state and resurrect a generation.
         lock(RotationGate)
         {
-            System.Threading.Volatile.Write(ref currentGenerations, new Generations(NewTable(), NewTable()));
+            CurrentGenerations = new Generations(NewTable(), NewTable());
         }
     }
 
@@ -401,18 +406,18 @@ public sealed class Utf8StringInterner
     /// Rotates generations once the hot one is full: the cold generation is dropped, the hot becomes cold, and a
     /// fresh hot generation starts. A no-op when another thread already rotated past the observed state.
     /// </summary>
-    /// <param name="observed">The generations the caller saw full; the rotation is skipped if it is no longer current.</param>
+    /// <param name="observed">The generations the caller saw full; the rotation is skipped when a newer pair has already replaced it.</param>
     private void Rotate(Generations observed)
     {
         lock(RotationGate)
         {
-            Generations current = System.Threading.Volatile.Read(ref currentGenerations);
+            Generations current = CurrentGenerations;
             if(!ReferenceEquals(current, observed) || current.HotCount < MaxEntries)
             {
                 return;
             }
 
-            System.Threading.Volatile.Write(ref currentGenerations, new Generations(NewTable(), current.Hot));
+            CurrentGenerations = new Generations(NewTable(), current.Hot);
             RotationsCounter?.Add(1);
         }
     }
@@ -436,6 +441,12 @@ public sealed class Utf8StringInterner
 
         /// <summary>The previous generation, dropped on the next rotation.</summary>
         public ConcurrentDictionary<Utf8String, Utf8String> Cold { get; } = cold;
+
+        /// <summary>The span-keyed face of <see cref="Hot"/>, built once so every probe skips the per-call comparer compatibility check.</summary>
+        public ConcurrentDictionary<Utf8String, Utf8String>.AlternateLookup<ReadOnlySpan<byte>> HotByBytes { get; } = hot.GetAlternateLookup<ReadOnlySpan<byte>>();
+
+        /// <summary>The span-keyed face of <see cref="Cold"/>, built once for the same reason.</summary>
+        public ConcurrentDictionary<Utf8String, Utf8String>.AlternateLookup<ReadOnlySpan<byte>> ColdByBytes { get; } = cold.GetAlternateLookup<ReadOnlySpan<byte>>();
 
         /// <summary>
         /// The number of entries added to <see cref="Hot"/>, maintained with

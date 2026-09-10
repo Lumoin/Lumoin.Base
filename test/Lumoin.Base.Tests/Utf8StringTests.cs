@@ -24,6 +24,20 @@ public sealed class Utf8StringTests
 
 
     [TestMethod]
+    public void HashCodeVariesWithContent()
+    {
+        Utf8String a = new("alpha"u8.ToArray());
+        Utf8String b = new("bravo"u8.ToArray());
+        Utf8String c = new("charlie"u8.ToArray());
+
+        //At least three distinct pairs must hash differently; a theoretical collision is accepted.
+        Assert.AreNotEqual(a.GetHashCode(), b.GetHashCode());
+        Assert.AreNotEqual(b.GetHashCode(), c.GetHashCode());
+        Assert.AreNotEqual(a.GetHashCode(), c.GetHashCode());
+    }
+
+
+    [TestMethod]
     public void EqualInstancesAreEqual()
     {
         Utf8String a = new("http://example.org/test"u8.ToArray());
@@ -64,11 +78,33 @@ public sealed class Utf8StringTests
 
 
     [TestMethod]
+    public void RelationalOperatorsAgreeOnEqualValues()
+    {
+        Utf8String a = new("same"u8.ToArray());
+        Utf8String b = new("same"u8.ToArray());
+
+        Assert.IsFalse(a < b);
+        Assert.IsTrue(a <= b);
+        Assert.IsFalse(a > b);
+        Assert.IsTrue(a >= b);
+    }
+
+
+    [TestMethod]
     public void ToStringDecodesUtf8()
     {
         Utf8String s = new("héllo"u8.ToArray());
 
         Assert.AreEqual("héllo", s.ToString());
+    }
+
+
+    [TestMethod]
+    public void TwoArgumentToStringMatchesParameterlessToString()
+    {
+        Utf8String s = new("héllo"u8.ToArray());
+
+        Assert.AreEqual(s.ToString(), s.ToString(null, CultureInfo.InvariantCulture));
     }
 
 
@@ -192,6 +228,15 @@ public sealed class Utf8StringTests
 
 
     [TestMethod]
+    public void ContainsFindsAValueAtIndexZero()
+    {
+        Utf8String s = new("abcd"u8.ToArray());
+
+        Assert.IsTrue(s.Contains("ab"u8));
+    }
+
+
+    [TestMethod]
     public void TryFromUtf8ValidatesMemory()
     {
         Assert.IsTrue(Utf8String.TryFromUtf8("valid"u8.ToArray().AsMemory(), out Utf8String valid));
@@ -211,7 +256,7 @@ public sealed class Utf8StringTests
         Span<byte> destination = stackalloc byte[8];
         Assert.IsTrue(s.TryFormat(destination, out int bytesWritten, provider: CultureInfo.InvariantCulture));
         Assert.AreEqual(5, bytesWritten);
-        Assert.IsTrue(destination[..bytesWritten].SequenceEqual("token"u8));
+        Assert.AreSequenceEqual("token"u8, destination[..bytesWritten]);
 
         Span<byte> tooSmall = stackalloc byte[2];
         Assert.IsFalse(s.TryFormat(tooSmall, out int none, provider: CultureInfo.InvariantCulture));
@@ -239,6 +284,6 @@ public sealed class Utf8StringTests
         Utf8String s = new("bytes"u8.ToArray());
 
         ReadOnlySpan<byte> span = s;
-        Assert.IsTrue(span.SequenceEqual("bytes"u8));
+        Assert.AreSequenceEqual("bytes"u8, span);
     }
 }

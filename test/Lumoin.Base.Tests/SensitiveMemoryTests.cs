@@ -36,8 +36,8 @@ public sealed class SensitiveMemoryTests
         byte[] bytes = [10, 20, 30];
         using TestDocument document = new(new HeldOwner(bytes), Tag.Empty);
 
-        Assert.AreSequenceEqual(bytes, document.AsReadOnlySpan().ToArray());
-        Assert.AreSequenceEqual(bytes, document.AsReadOnlyMemory().ToArray());
+        Assert.AreSequenceEqual(bytes, document.AsReadOnlySpan());
+        Assert.AreSequenceEqual(bytes, document.AsReadOnlyMemory());
     }
 
 
@@ -61,6 +61,29 @@ public sealed class SensitiveMemoryTests
         document.Dispose();
 
         Assert.ThrowsExactly<ObjectDisposedException>(() => document.AsReadOnlySpan().Length);
+    }
+
+
+    [TestMethod]
+    public void AsReadOnlyMemoryAfterDisposeThrows()
+    {
+        TestDocument document = new(new HeldOwner([1, 2, 3]), Tag.Empty);
+        document.Dispose();
+
+        Assert.ThrowsExactly<ObjectDisposedException>(() => document.AsReadOnlyMemory().Length);
+    }
+
+
+    [TestMethod]
+    public void DisposingTwiceDoesNotThrow()
+    {
+        byte[] bytes = [1, 2, 3];
+        TestDocument document = new(new HeldOwner(bytes), Tag.Empty);
+
+        document.Dispose();
+        document.Dispose();
+
+        Assert.AreSequenceEqual(new byte[] { 0, 0, 0 }, bytes, "The bytes must be wiped exactly once by the first dispose, not corrupted by the second.");
     }
 
 
@@ -93,6 +116,7 @@ public sealed class SensitiveMemoryTests
             ShouldListenTo = static s => s.Name == "Test.SensitiveMemory.Lifetime",
             Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
         };
+
         ActivitySource.AddActivityListener(listener);
 
         Activity activity = source.StartActivity("lifetime")!;
@@ -114,7 +138,7 @@ public sealed class SensitiveMemoryTests
         shared.Dispose();
 
         //The guard skipped the disposed transition, so a shared empty stays usable for later callers.
-        Assert.HasCount(0, shared.AsReadOnlySpan());
-        Assert.HasCount(0, shared.AsReadOnlyMemory());
+        Assert.IsEmpty(shared.AsReadOnlySpan());
+        Assert.IsEmpty(shared.AsReadOnlyMemory());
     }
 }

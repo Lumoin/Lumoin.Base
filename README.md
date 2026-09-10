@@ -29,5 +29,6 @@ X-Wing hybrid post-quantum KEMs, with secret-key scratch composed by the caller 
 serves `AllocationKind.Native` rents as per-rent isolated `sodium_malloc` guarded allocations
 (canary, guard pages, best-effort locking, zero on free; not available in the browser, and marked
 so). The libsodium 1.0.22 native library ships inside the package, built by this repository's CI
-from the pinned, checksum-verified upstream source, so the package works as-is from NuGet; on
-browser-wasm the same binding is statically linked at publish instead.
+from the pinned, checksum-verified upstream source, so the package works as-is from NuGet; the
+package ships the browser-wasm static archive the same way, and its buildTransitive targets link
+it into `dotnet.wasm` at publish — the consuming app needs the wasm-tools workload.

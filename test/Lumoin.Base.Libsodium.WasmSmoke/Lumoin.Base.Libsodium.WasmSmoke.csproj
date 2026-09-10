@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk.WebAssembly">
 
   <PropertyGroup>
-    <!-- browser-wasm needs .NET 11's Emscripten toolchain (see the wasm-smoke workflow); the rest
-         of the repository stays on the net10.0 TFM pinned in Directory.Build.props. -->
+    <!-- This project targets net11.0 like the whole repository (Directory.Build.props) and needs
+         the wasm-tools workload for the native relink (see the wasm-smoke workflow). -->
     <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
@@ -18,12 +18,10 @@
     <NoWarn>$(NoWarn);CA1303</NoWarn>
 
     <!-- Not part of the locked-restore solution build (deliberately absent from Lumoin.Base.slnx):
-         only the wasm-smoke workflow restores this project, on a preview SDK whose implicit package
-         graph shifts per preview, so a committed lock file would churn without adding integrity.
-         NOTE: restoring this project still REWRITES the referenced projects' committed
-         packages.lock.json files with preview-SDK framework versions; after a local smoke run,
-         revert those two files (git checkout - - src/*/packages.lock.json) or the main solution's
-         locked-mode restore breaks. CI checkouts are ephemeral, so the workflow does not care. -->
+         only the wasm-smoke workflow restores this project, on the repository's SDK pin
+         (global.json), whose implicit net11.0 package graph shifts per SDK release, so a committed
+         lock file would churn without adding integrity. Restoring it on that pin leaves the
+         referenced projects' committed packages.lock.json files unchanged. -->
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
 
     <!-- Relink dotnet.wasm with the family-built static libsodium. The archive path comes in via

@@ -9,10 +9,18 @@ using Lumoin.Base.Libsodium;
 
 int pass = 0, fail = 0;
 
-void Check(string name, bool ok)
+void Check(string name, bool hasPassed)
 {
-    if (ok) { pass++; Console.WriteLine($"PASS {name}"); }
-    else { fail++; Console.WriteLine($"FAIL {name}"); }
+    if(hasPassed)
+    {
+        pass++;
+        Console.WriteLine($"PASS {name}");
+    }
+    else
+    {
+        fail++;
+        Console.WriteLine($"FAIL {name}");
+    }
 }
 
 try
@@ -108,7 +116,7 @@ try
     Check("X-Wing decapsulate returns 0", LibsodiumCrypto.XWingDecapsulate(kemDecapsulated, kemCiphertext, kemSecret) == 0);
     Check("X-Wing shared secrets agree", kemDecapsulated.SequenceEqual(kemEncapsulated));
 }
-catch (Exception ex)
+catch(Exception ex)
 {
     fail++;
     Console.WriteLine($"FAIL unhandled exception: {ex}");

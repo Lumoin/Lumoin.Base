@@ -12,7 +12,7 @@ namespace Lumoin.Base.Libsodium;
 /// <see cref="NativeLibrary.SetDllImportResolver(System.Reflection.Assembly, DllImportResolver)"/>
 /// on this assembly. On browser-wasm the same imports are satisfied by a <c>libsodium.a</c>
 /// statically linked into <c>dotnet.wasm</c> at publish, keyed by this same module name. The
-/// <c>net10.0-ios</c>/<c>net10.0-maccatalyst</c> builds of this assembly use <c>__Internal</c>
+/// <c>net11.0-ios</c>/<c>net11.0-maccatalyst</c> builds of this assembly use <c>__Internal</c>
 /// instead, resolving against the packed static xcframework linked into the app binary.
 /// </summary>
 /// <remarks>

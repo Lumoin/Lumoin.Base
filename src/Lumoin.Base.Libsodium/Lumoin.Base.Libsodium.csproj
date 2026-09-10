@@ -11,16 +11,16 @@
   </PropertyGroup>
 
   <!-- Apple mobile TFMs are OPT-IN (-p:LumoinAppleTfms=true): the ios/maccatalyst workloads
-       exist only on Windows and macOS hosts, so the default TFM set stays net10.0 everywhere and
+       exist only on Windows and macOS hosts, so the default TFM set stays net11.0 everywhere and
        every existing CI leg, test project, and sibling source consumer restores and builds as
        before against the committed packages.lock.json. The pack-libsodium CI job (macOS) opts in
-       so the published package carries lib/net10.0-ios and lib/net10.0-maccatalyst assemblies
+       so the published package carries lib/net11.0-ios and lib/net11.0-maccatalyst assemblies
        whose LibraryImport module name is __Internal — the only resolution mechanism that works
        against the statically linked xcframework — restoring against the separate
        packages.apple.lock.json committed for that TFM set. -->
   <PropertyGroup Condition="'$(LumoinAppleTfms)' == 'true'">
     <TargetFramework></TargetFramework>
-    <TargetFrameworks>net10.0;net10.0-ios;net10.0-maccatalyst</TargetFrameworks>
+    <TargetFrameworks>net11.0;net11.0-ios;net11.0-maccatalyst</TargetFrameworks>
     <NuGetLockFilePath>packages.apple.lock.json</NuGetLockFilePath>
   </PropertyGroup>
 

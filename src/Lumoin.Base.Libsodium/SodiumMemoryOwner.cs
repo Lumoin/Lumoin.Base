@@ -33,7 +33,7 @@ internal sealed unsafe class SodiumMemoryOwner: MemoryManager<byte>
     /// <summary>
     /// The exact allocation length in bytes; also the length of every span and memory handed out.
     /// </summary>
-    private readonly int length;
+    private int Length { get; }
 
     /// <summary>
     /// The <c>sodium_malloc</c> pointer. Zero once disposed; claimed atomically so the region is
@@ -50,7 +50,7 @@ internal sealed unsafe class SodiumMemoryOwner: MemoryManager<byte>
     public SodiumMemoryOwner(nint pointer, int length)
     {
         this.pointer = pointer;
-        this.length = length;
+        Length = length;
     }
 
 
@@ -76,7 +76,7 @@ internal sealed unsafe class SodiumMemoryOwner: MemoryManager<byte>
         nint currentPointer = pointer;
         ObjectDisposedException.ThrowIf(currentPointer == 0, this);
 
-        return new Span<byte>((void*)currentPointer, length);
+        return new Span<byte>((void*)currentPointer, Length);
     }
 
 
@@ -94,7 +94,7 @@ internal sealed unsafe class SodiumMemoryOwner: MemoryManager<byte>
     public override MemoryHandle Pin(int elementIndex = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(elementIndex);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(elementIndex, length);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(elementIndex, Length);
 
         nint currentPointer = pointer;
         ObjectDisposedException.ThrowIf(currentPointer == 0, this);
@@ -125,7 +125,7 @@ internal sealed unsafe class SodiumMemoryOwner: MemoryManager<byte>
         nint claimedPointer = Interlocked.Exchange(ref pointer, 0);
         if(claimedPointer != 0)
         {
-            NativeMethods.MemZero((void*)claimedPointer, (nuint)length);
+            NativeMethods.MemZero((void*)claimedPointer, (nuint)Length);
             NativeMethods.Free((void*)claimedPointer);
         }
     }

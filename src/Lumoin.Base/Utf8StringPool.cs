@@ -43,7 +43,7 @@ namespace Lumoin.Base;
 /// not thread-safe for concurrent interning (single-writer); the underlying pool's rentals are.
 /// </para>
 /// </remarks>
-[DebuggerDisplay("Utf8StringPool: Count={Count}, TotalBytes={TotalBytesInterned}")]
+[DebuggerDisplay("Utf8StringPool: Count={Table.Count}, TotalBytes={TotalBytesInterned}")]
 public sealed class Utf8StringPool: IDisposable
 {
     /// <summary>
@@ -204,7 +204,7 @@ public sealed class Utf8StringPool: IDisposable
     }
 
 
-    /// <summary>Gets the total bytes interned. Test/diagnostic accessor.</summary>
+    /// <summary>Gets the total bytes interned; the measurement behind <see cref="Utf8StringPoolMetrics.TotalBytesInterned"/> and the debugger display.</summary>
     internal long TotalBytesInterned { get; private set; }
 
 
@@ -214,7 +214,7 @@ public sealed class Utf8StringPool: IDisposable
 
     /// <summary>
     /// Interns a UTF-8 byte sequence, returning a <see cref="Utf8String"/> backed by pool memory. If the
-    /// same bytes were interned before, the previously created value is returned with no allocation.
+    /// same bytes are already interned, the existing value is returned with no allocation.
     /// </summary>
     /// <param name="utf8Bytes">The UTF-8 bytes to intern.</param>
     /// <returns>An interned <see cref="Utf8String"/> over pool-managed memory.</returns>
@@ -272,7 +272,12 @@ public sealed class Utf8StringPool: IDisposable
     }
 
 
-    /// <summary>Interns a .NET string by encoding it as UTF-8.</summary>
+    /// <summary>
+    /// Interns a .NET string by encoding it as UTF-8. The encoding is lossy for ill-formed UTF-16: an unpaired
+    /// surrogate is replaced with U+FFFD by <see cref="System.Text.Encoding.UTF8"/>'s replacement fallback, so this
+    /// method never throws for it, and two distinct .NET strings that differ only in ill-formed surrogates intern to
+    /// one <see cref="Utf8String"/>.
+    /// </summary>
     /// <param name="value">The string to intern.</param>
     /// <returns>An interned <see cref="Utf8String"/> over pool-managed memory.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>

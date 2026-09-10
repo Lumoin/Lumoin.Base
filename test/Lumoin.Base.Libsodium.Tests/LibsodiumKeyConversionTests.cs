@@ -83,7 +83,7 @@ public sealed class LibsodiumKeyConversionTests
         Span<byte> derivedPublicKey = stackalloc byte[LibsodiumCrypto.X25519PointLength];
         Assert.AreEqual(0, LibsodiumCrypto.ScalarMultBase(derivedPublicKey, curvePrivateKeyOwner.Memory.Span), "crypto_scalarmult_base should succeed.");
 
-        Assert.IsTrue(derivedPublicKey.SequenceEqual(curvePublicKeyOwner.Memory.Span),
+        Assert.AreSequenceEqual(curvePublicKeyOwner.Memory.Span, derivedPublicKey,
             "Both conversion routes must land on the same X25519 public key.");
     }
 }

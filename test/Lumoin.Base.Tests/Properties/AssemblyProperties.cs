@@ -9,7 +9,7 @@
 // To rerun exactly that case, set the CsCheck_Seed environment variable to the printed value. CsCheck
 // reads it for the whole process and applies it to every Sample run, so combine it with a test filter.
 // CsCheck_Iter overrides the iteration count (default 100); CsCheck_Time runs for a number of seconds
-// instead. These environment variables are the global override mechanism documented by CsCheck 4.7.0.
+// instead. These environment variables are the global override mechanism documented by CsCheck.
 //
 // PowerShell:
 //     $env:CsCheck_Seed = "0ycPmO1H_kG7"
@@ -24,5 +24,8 @@
 // property tests into a single example and destroys their exploration. Pin only on the command line for
 // the lifetime of one debugging session, then clear it.
 
-[assembly: Parallelize]
+// Method-level parallelism: tests that observe process-wide sources (the BaseMemoryPool ActivitySource,
+// shared meter names) filter by their own trace id or meter instance, so any interleaving is safe; the
+// few tests that mutate ambient state (Utf8StringInterner.Instance) carry [DoNotParallelize].
+[assembly: Parallelize(Scope = ExecutionScope.MethodLevel)]
 [assembly: DiscoverInternals]
