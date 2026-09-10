@@ -73,7 +73,7 @@ public sealed class LibsodiumCryptoCsCheckTests
             Span<byte> decrypted = stackalloc byte[message.Length];
             Assert.AreEqual(0, LibsodiumCrypto.AeadXChaCha20Poly1305Decrypt(decrypted, ciphertext, associatedData, nonce, key),
                 "Decryption should succeed.");
-            Assert.IsTrue(decrypted.SequenceEqual(message), "The round-tripped plaintext must match.");
+            Assert.AreSequenceEqual(message.AsSpan(), decrypted, "The round-tripped plaintext must match.");
 
             int bitToFlip = bitSeed % (ciphertext.Length * 8);
             ciphertext[bitToFlip / 8] ^= (byte)(1 << (bitToFlip % 8));

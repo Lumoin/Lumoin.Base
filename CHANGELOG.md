@@ -111,18 +111,25 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   (win-x64, win-arm64, linux-x64, linux-arm64, osx-x64, osx-arm64, android-arm64, android-x64;
   iOS and Mac Catalyst link a bundled static xcframework through the package's buildTransitive
   targets), built by the family from the pinned, checksum-verified upstream release source, so
-  the package works as-is from NuGet; on browser-wasm the same binding is statically linked at
-  publish instead. Binaries the build runner can load are proven by running the package's own
-  test suite against them; cross-compiled mobile binaries ship on pinned-source provenance with
-  architecture and exported-symbol verification. The package multi-targets `net10.0` plus
-  `net10.0-ios`/`net10.0-maccatalyst`; the Apple assemblies import via `__Internal`, resolving
-  against the statically linked xcframework the buildTransitive targets wire into the app build.
+  the package works as-is from NuGet; on browser-wasm the same binding links the packed static
+  archive (`runtimes/browser-wasm/native/libsodium.a`, built at the Emscripten the pinned SDK's
+  wasm-tools workload uses) into `dotnet.wasm` at publish through the same buildTransitive
+  targets, which warn (`LUMOIN0001`) when the consuming app's workload pins a different
+  Emscripten than the archive was built with. Binaries the build runner can load are proven by running the package's own test suite
+  against them and the browser archive by executing the wasm smoke under Node; cross-compiled
+  mobile binaries ship on pinned-source provenance with architecture and exported-symbol
+  verification. The package multi-targets `net11.0` plus `net11.0-ios`/`net11.0-maccatalyst`;
+  the Apple assemblies import via `__Internal`, resolving against the statically linked
+  xcframework the buildTransitive targets wire into the app build.
 
 ### Changed
 
-- Toolchain refresh: .NET SDK 10.0.400 (the wasm smoke pins .NET 11 preview 7), MSTest 4.3.3,
-  Microsoft.Testing.Extensions 2.3.3, CsCheck 4.8.0, System.Security.Cryptography.Xml 10.0.11,
-  and harden-runner v2.20.1.
+- **Every package targets `net11.0`** (.NET 11 RC1, go-live licence); consumers build with the
+  .NET 11 SDK. This library leads the family's move to .NET 11.
+- Toolchain refresh: .NET SDK 11.0.100-rc.1 (the wasm smoke builds on the same pin), MSTest
+  4.4.0, Microsoft.Testing.Extensions 2.4.0, code coverage 18.11.0, CsCheck 4.8.0, the
+  diagnostics local tools 10.0.731102, `dotnet-stryker` for mutation testing, and harden-runner
+  v2.21.1.
 - Package `Lumoin.Base.Sodium` is retired: its guarded-memory backing (`SodiumBacking`,
   namespace now `Lumoin.Base.Libsodium`) ships in `Lumoin.Base.Libsodium`. 0.0.7 remains the
   last release of the retired id.
@@ -144,3 +151,25 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   build-time `System.Security.Cryptography.Xml` pin at 10.0.10, addressing published advisories
   against 10.0.9. The pinned `actions/checkout` and `actions/setup-dotnet` CI actions moved to
   their latest releases.
+- `BaseMemoryPool` validates arguments with the BCL throw helpers
+  (`ArgumentOutOfRangeException.ThrowIfNegativeOrZero` and friends): exception types and parameter
+  names are unchanged, the messages are the BCL's and carry the offending value.
+- `MemoryProtectionBacking.Allocate`'s `InsufficientMemoryException` message names the platform
+  error in words beside the numeric code (`Marshal.GetPInvokeErrorMessage`), so an `ENOMEM` budget
+  exhaustion and an `EPERM` missing capability are told apart without a lookup.
+- `Utf8StringInterner` serializes rotations with `System.Threading.Lock`, resolves each
+  generation's span-keyed lookup once instead of on every probe, and publishes the generation pair
+  through a volatile property.
+- Documentation corrections: `Utf8StringInterner`'s untrusted-input guidance states that the
+  default `Utf8StringComparer.Ordinal` hash is seeded per process and that a deterministic
+  `Utf8HashFunction` is the predictable one; the observable instruments in `Utf8StringPoolMetrics`
+  and `Utf8StringInternerMetrics` are documented as up-down counters; `Utf8StringPool.Intern(string)`
+  documents its U+FFFD replacement; `Lumoin.Base.Libsodium`'s docs describe the natives shipping
+  inside the package and the `beforefieldinit` initialization gate.
+
+### Fixed
+
+- An `ObjectDisposedException` thrown from a disposed slab or rented owner reported
+  `System.String` as the disposed object's name; it now names the owner's type.
+- `SensitiveMemory` wipes its bytes on disposal with `CryptographicOperations.ZeroMemory` instead
+  of `Span.Clear`, so the wipe cannot be elided.

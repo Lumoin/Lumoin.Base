@@ -6,8 +6,10 @@ namespace Lumoin.Base.Libsodium;
 /// <summary>
 /// The raw libsodium crypto surface for the Lumoin family: Ed25519 seed-keypair generation,
 /// detached signing and verification, Ed25519-to-X25519 conversion and X25519 scalar
-/// multiplication, exposed as thin wrappers over the native entry points with libsodium's own
-/// return-code semantics. Every operation forces the one-time <c>sodium_init</c> gate first.
+/// multiplication, XChaCha20-Poly1305 AEAD, the ML-KEM-768 and X-Wing KEMs and libsodium's
+/// random number generator, exposed as thin wrappers over the native entry points with
+/// libsodium's own return-code semantics. Every operation forces the one-time <c>sodium_init</c>
+/// gate first.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -15,10 +17,11 @@ namespace Lumoin.Base.Libsodium;
 /// or as a raw pointer into caller-composed scratch memory — never as a naked <c>byte[]</c>.
 /// </para>
 /// <para>
-/// The scratch memory that holds libsodium's 64-byte expanded Ed25519 secret key form is composed
-/// by the CALLER as a <see cref="MemoryPool{T}"/> (see <see cref="AllocateSecretKeyScratch"/>):
+/// The scratch memory that holds the secret keys handed to the <c>nint</c> operations — libsodium's
+/// 64-byte expanded Ed25519 secret key form and the ML-KEM-768 and X-Wing secret keys — is composed
+/// by the CALLER as a <see cref="MemoryPool{T}"/> (see <see cref="AllocateSecretScratch"/>):
 /// a non-browser consumer composes guarded or locked native backing (the family memory-protection
-/// packages) and the expanded key never touches managed memory; a browser-wasm consumer composes a
+/// packages) and the secret key never touches managed memory; a browser-wasm consumer composes a
 /// managed or pinned pool, where the honest posture is zero-on-return — all wasm linear memory is
 /// JS-visible, and that difference is the caller's explicit choice, never silently implied parity.
 /// </para>
@@ -101,23 +104,25 @@ public static class LibsodiumCrypto
     /// Gets a value confirming libsodium has completed its one-time <c>sodium_init</c> initialization.
     /// </summary>
     /// <remarks>
-    /// This property has a non-trivial initializer, so the C# compiler emits an explicit static
-    /// constructor for this type. The CLR guarantees that constructor runs exactly once, is mutually
-    /// exclusive across threads, and completes before the first access to any static member of this
-    /// type — giving <c>sodium_init</c> the thread-safe, run-once gate libsodium requires without any
-    /// additional manual locking. <see cref="EnsureInitialized"/> is the call-site-friendly entry point.
+    /// This property has a non-trivial initializer and the type declares no static constructor, so
+    /// the C# compiler emits a <c>beforefieldinit</c> type initializer. The CLR runs that initializer
+    /// exactly once, mutually exclusively across threads, and no later than the first read of the
+    /// backing field — at that read on CoreCLR — rather than on entry to every static method, giving
+    /// <c>sodium_init</c> the thread-safe, run-once gate libsodium requires without any additional
+    /// manual locking and letting argument validation in the public operations run ahead of the gate.
+    /// <see cref="EnsureInitialized"/> is the call-site-friendly entry point.
     /// </remarks>
-    private static bool Initialized { get; } = InitializeSodium();
+    private static bool IsInitialized { get; } = InitializeSodium();
 
 
     /// <summary>
-    /// Forces libsodium's one-time initialization gate (<see cref="Initialized"/>) to run before any
+    /// Forces libsodium's one-time initialization gate (<see cref="IsInitialized"/>) to run before any
     /// other native call. Every operation on this type calls this first; consumers may also call it
     /// eagerly at composition time to surface a missing or broken native library early.
     /// </summary>
     public static void EnsureInitialized()
     {
-        _ = Initialized;
+        _ = IsInitialized;
     }
 
 

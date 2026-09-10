@@ -4,21 +4,12 @@ using System.Runtime.InteropServices;
 namespace Lumoin.Base.Libsodium;
 
 /// <summary>
-/// These are the guarded-memory entry points behind <see cref="SodiumBacking"/>.
-/// The raw libsodium entry points behind <see cref="SodiumBacking"/>. The module name
-/// <c>libsodium</c> resolves per platform to <c>libsodium.dll</c>, <c>libsodium.so</c> or
-/// <c>libsodium.dylib</c> through the standard .NET native library probing (application directory,
-/// <c>runtimes/&lt;rid&gt;/native</c> package assets, OS loader paths); a host or test harness can
-/// override resolution with
-/// <see cref="NativeLibrary.SetDllImportResolver(System.Reflection.Assembly, DllImportResolver)"/>
-/// on this assembly.
+/// The guarded-memory entry points (<c>sodium_malloc</c>, <c>sodium_free</c>, <c>sodium_memzero</c>)
+/// behind <see cref="SodiumBacking"/>. Module resolution, the <c>__Internal</c> Apple builds, the
+/// cdecl declaration and the safe-directory loader restriction are documented once on the crypto
+/// part of this class in <c>NativeMethods.cs</c>; the same <c>LibraryName</c> and per-import
+/// attributes apply here.
 /// </summary>
-/// <remarks>
-/// All libsodium exports use the cdecl calling convention (<c>SODIUM_EXPORT</c>), declared
-/// explicitly so the win-x86 flavor does not silently marshal through the platform default.
-/// Every import restricts the Windows loader to <see cref="DllImportSearchPath.SafeDirectories"/>
-/// so a libsodium.dll planted in the current working directory can never be picked up.
-/// </remarks>
 internal static unsafe partial class NativeMethods
 {
     /// <summary>

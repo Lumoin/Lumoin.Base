@@ -108,7 +108,7 @@ public sealed class BaseMemoryPoolCsCheckTests
 
             Task.WaitAll(tasks, TestContext.CancellationToken);
 
-            Assert.IsTrue(exceptions.IsEmpty,
+            Assert.IsEmpty(exceptions,
                 $"No exceptions should occur during concurrent operations. Found: {string.Join(", ", exceptions)}.");
         });
     }

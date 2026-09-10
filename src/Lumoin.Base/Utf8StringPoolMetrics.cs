@@ -20,7 +20,7 @@ public static class Utf8StringPoolMetrics
 {
     /// <summary>
     /// Meter name for the UTF-8 string pool instruments. Register this name in your metrics collection
-    /// configuration to collect the pool's intern counters and gauges.
+    /// configuration to collect the pool's intern counters and observable instruments.
     /// </summary>
     public static readonly string MeterName = "Lumoin.Base.Utf8StringPool";
 
@@ -40,14 +40,16 @@ public static class Utf8StringPoolMetrics
 
 
     /// <summary>
-    /// Observable counter tracking the number of unique values interned in the pool.
+    /// Observable up-down counter tracking the number of unique values interned in the pool; it falls back to
+    /// zero on <see cref="Utf8StringPool.Reset"/> and stops reporting once the pool is disposed.
     /// Unit: strings (count)
     /// </summary>
     public static readonly string UniqueCount = "Lumoin.Utf8StringPool.UniqueCount";
 
 
     /// <summary>
-    /// Observable counter tracking the total bytes interned in the pool.
+    /// Observable up-down counter tracking the total bytes interned in the pool; it falls back to zero on
+    /// <see cref="Utf8StringPool.Reset"/> and stops reporting once the pool is disposed.
     /// Unit: bytes
     /// </summary>
     public static readonly string TotalBytesInterned = "Lumoin.Utf8StringPool.TotalBytesInterned";

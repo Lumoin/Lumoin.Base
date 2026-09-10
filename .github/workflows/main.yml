@@ -55,8 +55,9 @@ env:
 
   # Endpoints harden-runner is permitted to reach: NuGet feed access, dotnet tool
   # downloads, .NET SDK installation, Sigstore attestation, certificate revocation,
-  # and the standard api.github.com surface. Add to this list when adding actions
-  # or external dependencies.
+  # the standard api.github.com surface, and emsdk toolchain downloads for the
+  # browser-wasm archive. Add to this list when adding actions or external
+  # dependencies.
   COMMON_ALLOWED_ENDPOINTS: >
     aka.ms:443
     api.github.com:443
@@ -72,6 +73,7 @@ env:
     nuget.pkg.github.com:443
     fulcio.sigstore.dev:443
     rekor.sigstore.dev:443
+    storage.googleapis.com:443
     cacerts.digicert.com:80
     ts-crl.ws.symantec.com:80
     crl3.digicert.com:80
@@ -173,7 +175,7 @@ jobs:
     # coverage + a TRX report. The test executable has no extension on Linux/macOS,
     # so the same command works everywhere — the host shell finds the binary by name.
     - name: Test
-      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.BASE_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.BASE_TESTS }}' --report-trx --report-trx-filename testresults.trx --results-directory '${{ github.workspace }}/reports'
+      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.BASE_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net11.0/${{ env.BASE_TESTS }}' --report-trx --report-trx-filename testresults.trx --results-directory '${{ github.workspace }}/reports'
       timeout-minutes: 20
 
     # Test hosts consume the library as a project reference, which does not carry the packed
@@ -182,13 +184,13 @@ jobs:
     # availability-independent tests still execute. The natives job proves every packed binary
     # against this same suite with a hard "skipped: 0" gate.
     - name: Test (Libsodium)
-      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage-libsodium.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.LIBSODIUM_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.LIBSODIUM_TESTS }}' --report-trx --report-trx-filename testresults-libsodium.trx --results-directory '${{ github.workspace }}/reports'
+      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage-libsodium.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.LIBSODIUM_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net11.0/${{ env.LIBSODIUM_TESTS }}' --report-trx --report-trx-filename testresults-libsodium.trx --results-directory '${{ github.workspace }}/reports'
       timeout-minutes: 10
 
     # MemoryProtection P/Invokes only kernel32/libc, which every runner ships, so this
     # suite runs for real on all four legs — VirtualLock on Windows, mlock elsewhere.
     - name: Test (MemoryProtection)
-      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage-memoryprotection.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.MEMORY_PROTECTION_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net10.0/${{ env.MEMORY_PROTECTION_TESTS }}' --report-trx --report-trx-filename testresults-memoryprotection.trx --results-directory '${{ github.workspace }}/reports'
+      run: dotnet tool run dotnet-coverage collect --output '${{ github.workspace }}/reports/coverage-memoryprotection.cobertura.xml' --output-format cobertura '${{ github.workspace }}/test/${{ env.MEMORY_PROTECTION_TESTS }}/bin/${{ env.BUILD_CONFIGURATION }}/net11.0/${{ env.MEMORY_PROTECTION_TESTS }}' --report-trx --report-trx-filename testresults-memoryprotection.trx --results-directory '${{ github.workspace }}/reports'
       timeout-minutes: 10
 
 
@@ -203,10 +205,13 @@ jobs:
   # builds it on a GitHub-hosted runner. The gate is two-tier. Host legs (kind: host) prove the
   # binary by running the Lumoin.Base.Libsodium test suite against it with a hard "skipped: 0"
   # gate: the suite skips as inconclusive without a working library, so a binary that fails to
-  # load cannot pass silently. Cross-compiled legs (kind: android here, plus the
-  # natives-apple-mobile job below) cannot execute their output on the build runner, so they
-  # ship on provenance instead: the pinned checksum-verified source plus architecture and
-  # exported-symbol verification of each artifact.
+  # load cannot pass silently. The browser-wasm leg (kind: wasm) gets the same execution proof:
+  # it builds the static archive at the wasm-tools workload's pinned Emscripten and runs the
+  # Lumoin.Base.Libsodium.WasmSmoke app against it under the workload's Node. Cross-compiled
+  # legs (kind: android here, plus the natives-apple-mobile job below) cannot execute their
+  # output on the build runner, so they ship on provenance instead: the pinned
+  # checksum-verified source plus architecture and exported-symbol verification of each
+  # artifact.
   natives:
     name: libsodium ${{ matrix.rid }}
     permissions:
@@ -226,6 +231,10 @@ jobs:
           # compiler -march value, not the Android ABI, hence android-prefix.
           - { os: ubuntu-latest, rid: android-arm64, kind: android, android-script: android-armv8-a.sh, android-prefix: libsodium-android-armv8-a+crypto }
           - { os: ubuntu-latest, rid: android-x64, kind: android, android-script: android-x86_64.sh, android-prefix: libsodium-android-westmere }
+          # The browser static archive: built at the exact Emscripten version the pinned SDK's
+          # wasm-tools workload uses, and proven by executing the Lumoin.Base.Libsodium.WasmSmoke
+          # app under Node — the same full execution gate the host legs get.
+          - { os: ubuntu-latest, rid: browser-wasm, kind: wasm }
     steps:
     - name: Harden Runner
       if: ${{ runner.os == 'Linux' }}
@@ -238,10 +247,21 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+    # The SDK and the wasm-tools workload are installed into a runner-writable directory: the
+    # runner's default /usr/share/dotnet needs sudo for workload installs, and harden-runner runs
+    # with sudo disabled. Set via GITHUB_ENV in a step because the runner context does not exist
+    # in workflow-level env — a workflow that references it there fails to parse and never runs
+    # at all (schedule and dispatch alike).
+    - name: Point the .NET install at a runner-writable directory
+      if: ${{ matrix.kind == 'wasm' }}
+      run: |
+        echo "DOTNET_INSTALL_DIR=$RUNNER_TEMP/dotnet" >> "$GITHUB_ENV"
+        echo "DOTNET_ROOT=$RUNNER_TEMP/dotnet" >> "$GITHUB_ENV"
+
     # Only the host legs run the test-suite gate; the Android cross-build legs never execute
     # .NET and skip the SDK setup entirely.
     - name: Set up .NET SDK
-      if: ${{ matrix.kind == 'host' }}
+      if: ${{ matrix.kind == 'host' || matrix.kind == 'wasm' }}
       uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
       with:
         cache: true
@@ -251,6 +271,21 @@ jobs:
     - name: Install dependencies
       if: ${{ matrix.kind == 'host' }}
       run: dotnet restore --locked-mode
+
+    # The workload manifests of a release-candidate SDK are prerelease packages themselves.
+    - name: Install the wasm-tools workload
+      if: ${{ matrix.kind == 'wasm' }}
+      run: dotnet workload install wasm-tools --include-previews
+
+    - name: Discover the workload's Emscripten pin
+      if: ${{ matrix.kind == 'wasm' }}
+      id: emsdk
+      run: |
+        set -euo pipefail
+        pin="$(ls "$DOTNET_ROOT/packs" | grep -oP '^Microsoft\.NET\.Runtime\.Emscripten\.\K[0-9]+\.[0-9]+\.[0-9]+(?=\.Sdk\.)' | head -n 1)"
+        test -n "$pin"
+        echo "Workload Emscripten pin: $pin"
+        echo "version=$pin" >> "$GITHUB_OUTPUT"
 
     - name: Download and verify the pinned libsodium source (Unix)
       if: ${{ runner.os != 'Windows' }}
@@ -307,6 +342,25 @@ jobs:
         cp "./${{ matrix.android-prefix }}/lib/libsodium.so" "$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.so"
       timeout-minutes: 15
 
+    - name: Build libsodium (browser-wasm)
+      if: ${{ matrix.kind == 'wasm' }}
+      run: |
+        set -euo pipefail
+        pin='${{ steps.emsdk.outputs.version }}'
+        git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+        "$RUNNER_TEMP/emsdk/emsdk" install "$pin"
+        "$RUNNER_TEMP/emsdk/emsdk" activate "$pin"
+        source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+        cd "$RUNNER_TEMP/libsodium-src"
+        emconfigure ./configure --disable-shared --without-pthreads --disable-ssp --disable-asm --disable-pie --prefix="$RUNNER_TEMP/libsodium-wasm"
+        emmake make -j"$(nproc)" install
+        mkdir -p "$RUNNER_TEMP/staging/browser-wasm/native"
+        cp "$RUNNER_TEMP/libsodium-wasm/lib/libsodium.a" "$RUNNER_TEMP/staging/browser-wasm/native/libsodium.a"
+        # The archive links only against this Emscripten; the package's buildTransitive targets
+        # compare the stamp with the consumer's workload pin and warn on a mismatch (LUMOIN0001).
+        printf '%s\n' "$pin" > "$RUNNER_TEMP/staging/browser-wasm/native/libsodium.a.emscripten-version"
+      timeout-minutes: 20
+
     - name: Build libsodium (Windows, MSVC)
       if: ${{ runner.os == 'Windows' }}
       shell: pwsh
@@ -330,7 +384,7 @@ jobs:
         dotnet build test/Lumoin.Base.Libsodium.Tests/Lumoin.Base.Libsodium.Tests.csproj --configuration "$BUILD_CONFIGURATION" --no-restore
         ext=so; [ "${{ runner.os }}" = "macOS" ] && ext=dylib
         export LUMOIN_SODIUM_LIBRARY="$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.$ext"
-        out="$("./test/Lumoin.Base.Libsodium.Tests/bin/$BUILD_CONFIGURATION/net10.0/Lumoin.Base.Libsodium.Tests")"
+        out="$("./test/Lumoin.Base.Libsodium.Tests/bin/$BUILD_CONFIGURATION/net11.0/Lumoin.Base.Libsodium.Tests")"
         echo "$out"
         echo "$out" | grep -q "failed: 0" || { echo "Test failures against the built binary."; exit 1; }
         echo "$out" | grep -q "skipped: 0" || { echo "Suite skipped tests: the built binary did not load."; exit 1; }
@@ -343,12 +397,27 @@ jobs:
         dotnet build test/Lumoin.Base.Libsodium.Tests/Lumoin.Base.Libsodium.Tests.csproj --configuration $env:BUILD_CONFIGURATION --no-restore
         if ($LASTEXITCODE -ne 0) { throw 'Test build failed.' }
         $env:LUMOIN_SODIUM_LIBRARY = Join-Path $env:RUNNER_TEMP "staging\${{ matrix.rid }}\native\libsodium.dll"
-        $out = & ".\test\Lumoin.Base.Libsodium.Tests\bin\$env:BUILD_CONFIGURATION\net10.0\Lumoin.Base.Libsodium.Tests.exe" | Out-String
+        $out = & ".\test\Lumoin.Base.Libsodium.Tests\bin\$env:BUILD_CONFIGURATION\net11.0\Lumoin.Base.Libsodium.Tests.exe" | Out-String
         Write-Host $out
         if ($LASTEXITCODE -ne 0) { throw "Test run failed with $LASTEXITCODE" }
         if ($out -notmatch 'failed: 0') { throw 'Test failures against the built binary.' }
         if ($out -notmatch 'skipped: 0') { throw 'Suite skipped tests: the built binary did not load.' }
       timeout-minutes: 10
+
+    # The same full execution gate the host legs get, so the browser archive never ships
+    # unproven: publish the smoke app against the freshly built static archive and run it under
+    # the wasm-tools workload's Node.
+    - name: Prove the archive with the wasm smoke
+      if: ${{ matrix.kind == 'wasm' }}
+      working-directory: test/Lumoin.Base.Libsodium.WasmSmoke
+      run: |
+        set -euo pipefail
+        dotnet publish -c Release "-p:LibsodiumStaticLibrary=$RUNNER_TEMP/staging/browser-wasm/native/libsodium.a"
+        node="$(ls -d "$DOTNET_ROOT"/packs/Microsoft.NET.Runtime.Emscripten.*.Node.linux-x64/*/tools/bin/node | head -n 1)"
+        "$node" --version
+        # .NET 11's wasm runtime uses the exnref exception-handling proposal; the workload's
+        # Node needs the flag until exnref is on by default in its V8.
+        "$node" --experimental-wasm-exnref bin/Release/net11.0/publish/wwwroot/main.mjs
 
     # An Android binary cannot execute on the build runner, so this leg's gate is provenance:
     # the pinned checksum-verified source above, plus the machine architecture, the exported
@@ -622,9 +691,10 @@ jobs:
         global-json-file: global.json
 
     # Workload versions ride the SDK band resolved from global.json; the workload manifests and
-    # packs come from nuget.org like every other dependency.
+    # packs come from nuget.org like every other dependency. The manifests of a release-candidate
+    # SDK are prerelease packages themselves, hence --include-previews.
     - name: Install the ios and maccatalyst workloads
-      run: dotnet workload install ios maccatalyst
+      run: dotnet workload install ios maccatalyst --include-previews
       timeout-minutes: 15
 
     - name: Install dependencies
@@ -675,7 +745,7 @@ jobs:
     - name: Verify every native binary is present
       run: |
         set -euo pipefail
-        for f in win-x64/native/libsodium.dll win-arm64/native/libsodium.dll linux-x64/native/libsodium.so linux-arm64/native/libsodium.so osx-x64/native/libsodium.dylib osx-arm64/native/libsodium.dylib android-arm64/native/libsodium.so android-x64/native/libsodium.so; do
+        for f in win-x64/native/libsodium.dll win-arm64/native/libsodium.dll linux-x64/native/libsodium.so linux-arm64/native/libsodium.so osx-x64/native/libsodium.dylib osx-arm64/native/libsodium.dylib android-arm64/native/libsodium.so android-x64/native/libsodium.so browser-wasm/native/libsodium.a browser-wasm/native/libsodium.a.emscripten-version; do
           test -f "./native-staging/$f" || { echo "Missing $f"; exit 1; }
         done
         test -f ./apple-staging/libsodium.xcframework/Info.plist || { echo "Missing the xcframework manifest."; exit 1; }

@@ -2,6 +2,7 @@ using System.Buffers;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Security.Cryptography;
 
 namespace Lumoin.Base;
 
@@ -137,8 +138,9 @@ public abstract class SensitiveMemory: SensitiveData, IDisposable, IEquatable<Se
         if(disposing)
         {
             //Clear in case the underlying owner does not wipe on return; pooled owners also clear, so this is
-            //belt-and-suspenders for the sensitive case.
-            MemoryOwner.Memory.Span.Clear();
+            //belt-and-suspenders for the sensitive case. House discipline is
+            //CryptographicOperations.ZeroMemory (never Span.Clear), which the compiler cannot elide.
+            CryptographicOperations.ZeroMemory(MemoryOwner.Memory.Span);
             MemoryOwner.Dispose();
 
             //If the caller bounded an OTel span to this value's lifetime, stop it and contribute the neutral

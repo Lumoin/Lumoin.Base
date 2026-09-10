@@ -20,7 +20,7 @@ public static class Utf8StringInternerMetrics
 {
     /// <summary>
     /// Meter name for the UTF-8 string interner instruments. Register this name in your metrics collection
-    /// configuration to collect the interner's intern counters and gauges.
+    /// configuration to collect the interner's intern counters and observable instruments.
     /// </summary>
     public static readonly string MeterName = "Lumoin.Base.Utf8StringInterner";
 
@@ -47,7 +47,7 @@ public static class Utf8StringInternerMetrics
 
 
     /// <summary>
-    /// Observable gauge tracking the approximate live interned value count across both generations.
+    /// Observable up-down counter tracking the approximate live interned value count across both generations.
     /// Unit: strings (count)
     /// </summary>
     public static readonly string LiveCount = "Lumoin.Utf8StringInterner.LiveCount";

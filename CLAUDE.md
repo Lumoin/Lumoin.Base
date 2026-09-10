@@ -14,23 +14,28 @@ XChaCha20-Poly1305 AEAD, ML-KEM-768 and X-Wing KEMs; browser-capable, caller-com
 the package, built by main.yml's `natives` jobs from the pinned, checksum-verified upstream
 tarball: `runtimes/<rid>/native` shared libraries for win-x64/arm64, linux-x64/arm64,
 osx-x64/arm64 and android-arm64/x64, a static xcframework wired into iOS/Mac Catalyst app builds
-by buildTransitive `NativeReference` targets (resolved by the package's `net10.0-ios`/
-`net10.0-maccatalyst` assemblies via `__Internal`), and static linking at publish on
-browser-wasm. The
+by buildTransitive `NativeReference` targets (resolved by the package's `net11.0-ios`/
+`net11.0-maccatalyst` assemblies via `__Internal`), and a browser-wasm static archive
+(`runtimes/browser-wasm/native/libsodium.a`, built at the exact Emscripten the pinned SDK's
+wasm-tools workload uses) that the same targets link into `dotnet.wasm` at publish. The
 prove gate is two-tier: binaries the build runner can load are proven by running the
-Lumoin.Base.Libsodium test suite against them (`skipped: 0`); cross-compiled mobile binaries
+Lumoin.Base.Libsodium test suite against them (`skipped: 0`) and the browser archive by
+executing the wasm smoke app under the workload's Node; cross-compiled mobile binaries
 (Android, iOS, Catalyst) ship on pinned-source provenance plus architecture/symbol verification.
 The former `Lumoin.Base.Sodium` package is retired at 0.0.7 — its backing moved in here.
 `Lumoin.Base.MemoryProtection` is the same seam
 via the OS twins (`MemoryProtectionBacking.Allocate` → page-aligned `VirtualLock`/`mlock`+
 `MADV_DONTDUMP` locked allocations; pure P/Invoke into kernel32/libc, zero native assets, strict
 `InsufficientMemoryException` on budget exhaustion — never silent unlocked fallback). Single TFM
-`net10.0` — except `Lumoin.Base.Libsodium`, which adds OPT-IN `net10.0-ios`/`net10.0-maccatalyst`
+`net11.0` on the .NET 11 SDK pinned in `global.json` (this library leads: the family moves to
+.NET 11 with it) — except `Lumoin.Base.Libsodium`, which adds OPT-IN `net11.0-ios`/`net11.0-maccatalyst`
 (`-p:LumoinAppleTfms=true`, compiled with `__Internal` imports, restored against
 `packages.apple.lock.json`); the Apple workloads exist only on Windows/macOS hosts, so the
-default TFM set stays `net10.0` everywhere and only the macOS `pack-libsodium` job opts in.
-C# `preview`, SDK pinned in `global.json`; tests are MSTest + CsCheck on
-Microsoft.Testing.Platform; the MemoryProtection suite runs for real on every CI leg.
+default TFM set stays `net11.0` everywhere and only the macOS `pack-libsodium` job opts in.
+C# `preview`; tests are MSTest + CsCheck on Microsoft.Testing.Platform; the MemoryProtection
+suite runs for real on every CI leg. Mutation testing: `run-stryker.ps1` / `run-stryker.sh`
+(local tool `dotnet-stryker`, Microsoft.Testing.Platform runner, reports under
+`tempdocs/stryker/`).
 
 ## Hard constraints (do not drift)
 
@@ -46,8 +51,11 @@ Microsoft.Testing.Platform; the MemoryProtection suite runs for real on every CI
 - **Load-bearing family contracts:** exact-size `Rent(n)` (returns exactly `n` bytes),
   zero-on-return, double-return protection, `Tag`'s typed `Create/With/Get` and content equality,
   and the pool staying **byte-specialized** (non-generic; go generic only via an owner-coordinated
-  decision). Sibling repos (at least Veritas and Concordia) consume this repo's SOURCE via
-  sibling-path `ProjectReference`, so a broken `main` ripples into their builds immediately.
+  decision). Most siblings consume the published packages, but Concordia consumes this repo's
+  SOURCE via a sibling-path `ProjectReference`, so a broken `main` ripples into its build
+  immediately — and it must build on this repo's .NET 11 SDK band and resolve the same implicit
+  `Microsoft.NET.ILLink.Tasks` version the lock files record, or its restore fails in locked
+  mode and rewrites them otherwise.
 - **Strict native degradation** (commit `b1fcc83`): a `Native` rent with no wired backing THROWS by
   default; the graceful `Pinned` fallback is an explicit opt-in (`allowNativeDegradation: true`)
   and telemetry records the effective allocation kind plus a degradation event. Keep docs,
@@ -59,7 +67,9 @@ Microsoft.Testing.Platform; the MemoryProtection suite runs for real on every CI
   workloads — Windows with VS-installed workloads works; an isolated dotnet root from
   dotnet-install resolves Apple workloads unreliably (NETSDK1139) and is unsuitable here.
   Fallback: patch the lock's version/hash entries from a same-SDK default-lock regeneration and
-  let the macOS `pack-libsodium` locked-mode restore verify). New packable projects
+  let the macOS `pack-libsodium` locked-mode restore verify; its Apple sections are keyed by the
+  workload's TargetPlatformVersion, `net11.0-ios26.5` / `net11.0-maccatalyst26.5` for the RC1
+  workloads, which the manifest's `Microsoft.iOS.Sdk.net11.0_<tpv>` pack id reveals). New packable projects
   must be added to `LIBRARY_PROJECTS` in `.github/workflows/main.yml` (except Libsodium, packed
   by its own `pack-libsodium` macOS job), to `$projects` in
   `generate-local-test-nuget-packages.ps1`, and (if they fetch anything new) to the harden-runner

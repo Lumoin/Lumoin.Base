@@ -15,20 +15,20 @@ public static partial class TestAssemblySetup
     [AssemblyInitialize]
     public static void EnsureLockedMemoryBudget(TestContext context)
     {
-        if (!OperatingSystem.IsWindows())
+        if(!OperatingSystem.IsWindows())
         {
             return;
         }
 
         //Only ever grows the limits; an already larger host configuration is kept.
-        if (!GetProcessWorkingSetSize(CurrentProcessPseudoHandle, out nuint currentMinimum, out nuint currentMaximum))
+        if(!GetProcessWorkingSetSize(CurrentProcessPseudoHandle, out nuint currentMinimum, out nuint currentMaximum))
         {
             throw new InvalidOperationException($"GetProcessWorkingSetSize failed with Win32 error {Marshal.GetLastPInvokeError()}.");
         }
 
         nuint minimum = nuint.Max(currentMinimum, (nuint)(32 * 1024 * 1024));
         nuint maximum = nuint.Max(currentMaximum, (nuint)(128 * 1024 * 1024));
-        if (!SetProcessWorkingSetSize(CurrentProcessPseudoHandle, minimum, maximum))
+        if(!SetProcessWorkingSetSize(CurrentProcessPseudoHandle, minimum, maximum))
         {
             throw new InvalidOperationException($"SetProcessWorkingSetSize failed with Win32 error {Marshal.GetLastPInvokeError()}.");
         }

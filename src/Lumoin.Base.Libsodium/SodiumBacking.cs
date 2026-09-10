@@ -18,11 +18,12 @@ namespace Lumoin.Base.Libsodium;
 /// </code>
 /// </para>
 /// <para>
-/// This assembly carries no native binaries: the libsodium library is resolved at runtime through
-/// the standard .NET native library probing, with family-built native asset packages to supply it
-/// (never third-party repackagings). <see cref="IsAvailable"/> reports whether the library loaded
-/// and initialized, so a host can wire the backing only where it exists and rely on
-/// <see cref="BaseMemoryPool"/>'s strict-by-default degradation everywhere else.
+/// The libsodium native library ships inside this package as <c>runtimes/&lt;rid&gt;/native</c>
+/// assets, family-built from pinned upstream source (never third-party repackagings), and is
+/// resolved at runtime through the standard .NET native library probing.
+/// <see cref="IsAvailable"/> reports whether the library loaded and initialized, so a host can
+/// wire the backing only where it exists and rely on <see cref="BaseMemoryPool"/>'s
+/// strict-by-default degradation everywhere else.
 /// </para>
 /// <para>
 /// LOUD CONTRACT inherited from libsodium: the allocation is bracketed by no-access guard pages,

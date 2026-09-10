@@ -1,9 +1,12 @@
 <Project>
 
-  <!-- Wires the family-built static libsodium into iOS and Mac Catalyst app builds. These
-       platforms do not consume runtimes/<rid>/native shared libraries: the static archive slices
-       inside xcframeworks/libsodium.xcframework (arm64 device, arm64/x86_64 simulator and
-       Catalyst) are linked into the app binary by the Apple toolchain through this
+  <!-- Wires the family-built libsodium native assets into the two consumer surfaces
+       PackageReference resolution alone cannot reach: the iOS/Mac Catalyst static xcframework
+       and the browser-wasm static archive. -->
+
+  <!-- iOS and Mac Catalyst do not consume runtimes/<rid>/native shared libraries: the static
+       archive slices inside xcframeworks/libsodium.xcframework (arm64 device, arm64/x86_64
+       simulator and Catalyst) are linked into the app binary by the Apple toolchain through this
        NativeReference. The Exists() guard keeps a package that was packed without native assets
        (a local dotnet pack without -p:AppleXcframeworkDirectory) harmless to consumers. -->
 
@@ -17,5 +20,38 @@
       <ForceLoad>True</ForceLoad>
     </NativeReference>
   </ItemGroup>
+
+  <!-- The wasm SDK links NativeFileReference items into dotnet.wasm at publish
+       (BrowserWasmApp.targets adds every NativeFileReference to _WasmNativeFileForLinking), which
+       needs the consuming app to have the wasm-tools workload installed at the Emscripten version
+       the archive was built against. The Exists() guard keeps a package packed without native
+       assets harmless to consumers, same as the xcframework above. -->
+
+  <PropertyGroup>
+    <_LumoinLibsodiumWasmArchive>$(MSBuildThisFileDirectory)../runtimes/browser-wasm/native/libsodium.a</_LumoinLibsodiumWasmArchive>
+    <_LumoinLibsodiumWasmArchiveEmscriptenVersionFile>$(_LumoinLibsodiumWasmArchive).emscripten-version</_LumoinLibsodiumWasmArchiveEmscriptenVersionFile>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm' And Exists('$(_LumoinLibsodiumWasmArchive)')">
+    <NativeFileReference Include="$(_LumoinLibsodiumWasmArchive)" />
+  </ItemGroup>
+
+  <!-- The archive links cleanly only against the Emscripten it was built with. The natives job
+       stamps that version beside the archive; the wasm-tools workload publishes its own pin as
+       $(EmscriptenVersion) (the workload's Sdk.props reads emscripten-version.txt). A mismatch is
+       reported here as warning LUMOIN0001, naming both versions, instead of surfacing later as an
+       opaque link error. Suppress with NoWarn when the mismatch is known to link. -->
+
+  <Target Name="LumoinLibsodiumCheckWasmEmscriptenVersion"
+          BeforeTargets="Build"
+          Condition="'$(RuntimeIdentifier)' == 'browser-wasm' And Exists('$(_LumoinLibsodiumWasmArchive)') And Exists('$(_LumoinLibsodiumWasmArchiveEmscriptenVersionFile)')">
+    <PropertyGroup>
+      <_LumoinLibsodiumWasmArchiveEmscriptenVersion>$([System.IO.File]::ReadAllText('$(_LumoinLibsodiumWasmArchiveEmscriptenVersionFile)').Trim())</_LumoinLibsodiumWasmArchiveEmscriptenVersion>
+    </PropertyGroup>
+
+    <Warning Code="LUMOIN0001"
+             Condition="'$(EmscriptenVersion)' != '' And '$(EmscriptenVersion)' != '$(_LumoinLibsodiumWasmArchiveEmscriptenVersion)'"
+             Text="Lumoin.Base.Libsodium's browser-wasm libsodium.a was built with Emscripten $(_LumoinLibsodiumWasmArchiveEmscriptenVersion), but this wasm-tools workload pins Emscripten $(EmscriptenVersion); the static link into dotnet.wasm may fail. Build with the .NET SDK band the package was built for, or use a package built for this one." />
+  </Target>
 
 </Project>

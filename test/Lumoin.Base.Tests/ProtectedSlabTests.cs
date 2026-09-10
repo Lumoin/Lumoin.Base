@@ -1,6 +1,6 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Metrics;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -89,6 +89,22 @@ public sealed class ProtectedSlabTests
     }
 
 
+    //Locates the rented segment inside the first backing region and flips one byte at stompOffset from
+    //the segment's data start: bufferSize lands on the first trailing-canary byte, -1 on the last
+    //leading-canary byte. Returns the data offset so a caller can inspect the segment after the
+    //violating dispose.
+    private static int StompCanary(InstrumentedBacking backing, IMemoryOwner<byte> owner, int stompOffset)
+    {
+        byte[] region = backing.Owners[0].Buffer;
+        int segmentStart = LocateSegmentData(region, owner);
+        Assert.IsGreaterThanOrEqualTo(0, segmentStart, "The fill pattern should be present in the backing region.");
+
+        region[segmentStart + stompOffset] ^= 0xFF;
+
+        return segmentStart;
+    }
+
+
     [TestMethod]
     public void ProtectedSlabReusesOneRegionUntilCapacity()
     {
@@ -126,6 +142,68 @@ public sealed class ProtectedSlabTests
         {
             rental.Dispose();
         }
+    }
+
+
+    [TestMethod]
+    public async Task ConcurrentSlabRentReturnNeverAliases()
+    {
+        //A small per-slab capacity forces heavy segment reuse within the protected slab, so concurrent
+        //renters contend for the same shared backing region and its canary-bracketed segments. The
+        //invariant is the one BaseMemoryPoolTests.ConcurrentRentReturnNeverAliasesBackingMemory holds
+        //for the pooled kinds: no two live renters ever alias.
+        using var meter = new Meter("Test", "1.0.0");
+        using var pool = new BaseMemoryPool(
+            meter,
+            capacityStrategy: _ => 4,
+            nativeBacking: size => new InstrumentedRegionOwner(size),
+            nativeRentMode: NativeRentMode.ProtectedSlab);
+
+        const int taskCount = 32;
+        const int iterationsPerTask = 200;
+        const int bufferSize = 32;
+
+        var failures = new ConcurrentQueue<string>();
+        var cancellationToken = TestContext.CancellationToken;
+
+        var tasks = Enumerable.Range(0, taskCount).Select(taskIndex => Task.Run(async () =>
+        {
+            for(int iteration = 0; iteration < iterationsPerTask; iteration++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                byte pattern = (byte)((taskIndex * 31 + iteration) & 0xFF);
+
+                using var owner = pool.Rent(bufferSize, AllocationKind.Native);
+                if(owner.Memory.Length != bufferSize)
+                {
+                    failures.Enqueue($"Rented length {owner.Memory.Length}, expected {bufferSize} (task {taskIndex}, iter {iteration}).");
+
+                    return;
+                }
+
+                owner.Memory.Span.Fill(pattern);
+
+                //Yield so other renters interleave while this segment is held and filled.
+                await Task.Yield();
+
+                int mismatch = owner.Memory.Span.IndexOfAnyExcept(pattern);
+                if(mismatch >= 0)
+                {
+                    failures.Enqueue($"Aliasing detected at byte {mismatch}: was {owner.Memory.Span[mismatch]}, expected {pattern} (task {taskIndex}, iter {iteration}).");
+
+                    return;
+                }
+            }
+        }, cancellationToken)).ToArray();
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        Assert.IsEmpty(failures, $"No renter should ever observe aliased or mis-sized memory in a protected slab. First failures: {string.Join(" | ", failures.Take(5))}");
+
+        //After the storm settles every rental has been returned, so the pool must be fully usable.
+        using var afterStorm = pool.Rent(bufferSize, AllocationKind.Native);
+        Assert.HasCount(bufferSize, afterStorm.Memory, "Pool must remain usable after concurrent protected-slab rent/return.");
     }
 
 
@@ -175,10 +253,7 @@ public sealed class ProtectedSlabTests
 
         //With capacity 1, the second rent must reuse the segment just returned.
         using var second = pool.Rent(32, AllocationKind.Native);
-        foreach(byte b in second.Memory.Span)
-        {
-            Assert.AreEqual(0, b, "Returned protected-slab memory must be zeroed for security.");
-        }
+        Assert.AreEqual(-1, second.Memory.Span.IndexOfAnyExcept((byte)0), "Returned protected-slab memory must be zeroed for security.");
     }
 
 
@@ -201,16 +276,13 @@ public sealed class ProtectedSlabTests
         //Find the rented data span in the raw backing region, then stomp the first byte of the
         //trailing canary that immediately follows it.
         byte[] region = backing.Owners[0].Buffer;
-        int segmentStart = LocateSegmentData(region, owner);
-        Assert.IsGreaterThanOrEqualTo(0, segmentStart, "The fill pattern should be present in the backing region.");
-
-        region[segmentStart + bufferSize] ^= 0xFF;
+        int segmentStart = StompCanary(backing, owner, bufferSize);
 
         Assert.ThrowsExactly<CanaryViolationException>(() => owner.Dispose());
 
         //Despite the violation, the data must have been zeroed on the way out.
-        bool dataIsZero = region.AsSpan(segmentStart, bufferSize).IndexOfAnyExcept((byte)0) < 0;
-        Assert.IsTrue(dataIsZero, "The segment data must be zeroed even when a canary violation is detected.");
+        bool isDataZeroed = region.AsSpan(segmentStart, bufferSize).IndexOfAnyExcept((byte)0) < 0;
+        Assert.IsTrue(isDataZeroed, "The segment data must be zeroed even when a canary violation is detected.");
     }
 
 
@@ -230,11 +302,7 @@ public sealed class ProtectedSlabTests
 
         var owner = pool.Rent(bufferSize, AllocationKind.Native);
 
-        byte[] region = backing.Owners[0].Buffer;
-        int segmentStart = LocateSegmentData(region, owner);
-        Assert.IsGreaterThanOrEqualTo(0, segmentStart, "The fill pattern should be present in the backing region.");
-
-        region[segmentStart + bufferSize] ^= 0xFF;
+        StompCanary(backing, owner, bufferSize);
 
         Assert.ThrowsExactly<CanaryViolationException>(() => owner.Dispose());
 
@@ -262,11 +330,7 @@ public sealed class ProtectedSlabTests
 
         var owner = pool.Rent(violatedSize, AllocationKind.Native);
 
-        byte[] region = backing.Owners[0].Buffer;
-        int segmentStart = LocateSegmentData(region, owner);
-        Assert.IsGreaterThanOrEqualTo(0, segmentStart, "The fill pattern should be present in the backing region.");
-
-        region[segmentStart + violatedSize] ^= 0xFF;
+        StompCanary(backing, owner, violatedSize);
 
         Assert.ThrowsExactly<CanaryViolationException>(() => owner.Dispose());
 
@@ -370,6 +434,126 @@ public sealed class ProtectedSlabTests
 
 
     [TestMethod]
+    public void PoolDisposeReleasesIdleNativeSlabRegionImmediately()
+    {
+        var backing = new InstrumentedBacking();
+
+        var pool = new BaseMemoryPool(nativeBacking: backing.Allocate, nativeRentMode: NativeRentMode.ProtectedSlab);
+        var owner = pool.Rent(32, AllocationKind.Native);
+        owner.Dispose();
+
+        //With no outstanding rental the slab is already idle (IsFull) when the pool disposes it, so
+        //DisposeWhenIdle must release the backing region immediately rather than deferring to a later return.
+        pool.Dispose();
+
+        Assert.IsTrue(backing.Owners[0].IsDisposed,
+            "An idle protected native slab's backing region must be released immediately on pool disposal.");
+        Assert.IsTrue(backing.Owners[0].WasZeroedAtDispose,
+            "The immediately-released region must be fully zeroed before its owner is disposed.");
+    }
+
+
+    [TestMethod]
+    public void DisposingProtectedSlabRentalAfterPoolDisposedRecordsOkStatusOnActivity()
+    {
+        //The deferred-release design (NativeSlab.DisposeWhenIdle) guarantees a live rental never meets an
+        //already-disposed NativeSlab, so ReturnNativeSlab succeeds normally here too: the happy path runs to
+        //completion and the lifecycle activity records Ok, not the ObjectDisposedException catch in
+        //NativeSlabMemoryOwner.Dispose.
+        Activity.Current = null;
+
+        using var testRoot = new Activity(nameof(DisposingProtectedSlabRentalAfterPoolDisposedRecordsOkStatusOnActivity));
+        testRoot.Start();
+        var testTraceId = testRoot.TraceId;
+
+        var activities = new List<Activity>();
+
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BaseMemoryPool",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = activity =>
+            {
+                if(activity.TraceId == testTraceId)
+                {
+                    activities.Add(activity);
+                }
+            }
+        };
+
+        ActivitySource.AddActivityListener(activityListener);
+
+        var backing = new InstrumentedBacking();
+        var pool = new BaseMemoryPool(nativeBacking: backing.Allocate, nativeRentMode: NativeRentMode.ProtectedSlab);
+        var owner = pool.Rent(32, AllocationKind.Native);
+
+        pool.Dispose();
+
+        //Must not throw.
+        owner.Dispose();
+
+        testRoot.Stop();
+
+        var rentActivity = activities.FirstOrDefault(a => a.OperationName == "Rent");
+        Assert.IsNotNull(rentActivity, "Should have captured the Rent lifecycle activity.");
+        Assert.AreEqual(ActivityStatusCode.Ok, rentActivity.Status,
+            "A protected-slab return after pool disposal completes normally and records Ok.");
+        Assert.IsNull(rentActivity.StatusDescription, "The Ok status is set without a description.");
+
+        //A second dispose must remain safe.
+        owner.Dispose();
+    }
+
+
+    [TestMethod]
+    public async Task ProtectedSlabTrimExcessMetricsReturnToBaseline()
+    {
+        using var meter = new Meter(BaseMemoryPoolMetrics.MeterName, "1.0.0");
+        var reportedMetrics = new ConcurrentDictionary<string, long>();
+
+        using var listener = new MeterListener();
+
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if(instrument.Meter == meter)
+            {
+                meterListener.EnableMeasurementEvents(instrument);
+            }
+        };
+
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
+        {
+            reportedMetrics.AddOrUpdate(instrument.Name, measurement, (_, _) => measurement);
+        });
+
+        listener.SetMeasurementEventCallback<int>((instrument, measurement, tags, state) =>
+        {
+            reportedMetrics.AddOrUpdate(instrument.Name, measurement, (_, _) => measurement);
+        });
+
+        listener.Start();
+
+        var backing = new InstrumentedBacking();
+        using var pool = new BaseMemoryPool(meter, nativeBacking: backing.Allocate, nativeRentMode: NativeRentMode.ProtectedSlab);
+
+        var owner = pool.Rent(32, AllocationKind.Native);
+        owner.Dispose();
+
+        int reclaimed = pool.TrimExcess();
+        Assert.IsGreaterThanOrEqualTo(1, reclaimed, "TrimExcess should reclaim the idle protected native slab.");
+        Assert.IsTrue(backing.Owners[0].IsDisposed, "The backing region owner should be disposed after TrimExcess.");
+
+        listener.RecordObservableInstruments();
+        await Task.Delay(TimeSpan.FromMilliseconds(10), TestContext.CancellationToken).ConfigureAwait(false);
+
+        Assert.AreEqual(0L, reportedMetrics[BaseMemoryPoolMetrics.BaseMemoryPoolTotalSlabs],
+            "TrimExcess should reclaim the protected slab, bringing TotalSlabs back to zero.");
+        Assert.AreEqual(0L, reportedMetrics[BaseMemoryPoolMetrics.BaseMemoryPoolTotalMemoryAllocated],
+            "TrimExcess should release the protected slab's backing region, bringing TotalMemoryAllocated back to zero.");
+    }
+
+
+    [TestMethod]
     public void LeadingCanaryStompIsDetected()
     {
         var backing = new InstrumentedBacking();
@@ -388,17 +572,14 @@ public sealed class ProtectedSlabTests
         //The leading canary occupies the 16 bytes immediately before the data; stomp its last byte
         //(an underflow-style corruption, the mirror image of the trailing-canary test).
         byte[] region = backing.Owners[0].Buffer;
-        int segmentStart = LocateSegmentData(region, owner);
-        Assert.IsGreaterThanOrEqualTo(0, segmentStart, "The fill pattern should be present in the backing region.");
-
-        region[segmentStart - 1] ^= 0xFF;
+        int segmentStart = StompCanary(backing, owner, -1);
 
         var violation = Assert.ThrowsExactly<CanaryViolationException>(() => owner.Dispose());
         Assert.Contains("leading canary", violation.Message,
             "The violation must name the leading canary so the operator knows the overrun direction.");
 
-        bool dataIsZero = region.AsSpan(segmentStart, bufferSize).IndexOfAnyExcept((byte)0) < 0;
-        Assert.IsTrue(dataIsZero, "The segment data must be zeroed even when the leading canary is violated.");
+        bool isDataZeroed = region.AsSpan(segmentStart, bufferSize).IndexOfAnyExcept((byte)0) < 0;
+        Assert.IsTrue(isDataZeroed, "The segment data must be zeroed even when the leading canary is violated.");
     }
 
 
@@ -418,12 +599,8 @@ public sealed class ProtectedSlabTests
 
         var owner = pool.Rent(bufferSize, AllocationKind.Native);
 
-        byte[] region = backing.Owners[0].Buffer;
-        int segmentStart = LocateSegmentData(region, owner);
-        Assert.IsGreaterThanOrEqualTo(0, segmentStart, "The fill pattern should be present in the backing region.");
-
-        region[segmentStart - 1] ^= 0xFF;
-        region[segmentStart + bufferSize] ^= 0xFF;
+        StompCanary(backing, owner, -1);
+        StompCanary(backing, owner, bufferSize);
 
         var violation = Assert.ThrowsExactly<CanaryViolationException>(() => owner.Dispose());
         Assert.Contains("leading and trailing canaries", violation.Message,
@@ -447,11 +624,7 @@ public sealed class ProtectedSlabTests
 
         var owner = pool.Rent(bufferSize, AllocationKind.Native);
 
-        byte[] region = backing.Owners[0].Buffer;
-        int segmentStart = LocateSegmentData(region, owner);
-        Assert.IsGreaterThanOrEqualTo(0, segmentStart, "The fill pattern should be present in the backing region.");
-
-        region[segmentStart + bufferSize] ^= 0xFF;
+        StompCanary(backing, owner, bufferSize);
 
         Assert.ThrowsExactly<CanaryViolationException>(() => owner.Dispose());
 
@@ -519,7 +692,6 @@ public sealed class ProtectedSlabTests
 
 
     [TestMethod]
-    [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Analyzer false positive on testRoot.")]
     public void ProtectedSlabRentTagsNativeRentMode()
     {
         //Native alone does not distinguish per-rent isolated from protected-slab; the mode must be
@@ -565,7 +737,6 @@ public sealed class ProtectedSlabTests
 
 
     [TestMethod]
-    [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Analyzer false positive on testRoot.")]
     public void CanaryViolationEmitsActivityEventAndCounter()
     {
         Activity.Current = null;
@@ -618,11 +789,7 @@ public sealed class ProtectedSlabTests
 
         var owner = pool.Rent(bufferSize, AllocationKind.Native);
 
-        byte[] region = backing.Owners[0].Buffer;
-        int segmentStart = LocateSegmentData(region, owner);
-        Assert.IsGreaterThanOrEqualTo(0, segmentStart, "The fill pattern should be present in the backing region.");
-
-        region[segmentStart + bufferSize] ^= 0xFF;
+        StompCanary(backing, owner, bufferSize);
 
         Assert.ThrowsExactly<CanaryViolationException>(() => owner.Dispose());
 
@@ -631,8 +798,7 @@ public sealed class ProtectedSlabTests
         var rentActivity = activities.FirstOrDefault(a => a.OperationName == "Rent");
         Assert.IsNotNull(rentActivity, "Should have captured the Rent lifecycle activity.");
 
-        bool hasViolationEvent = rentActivity.Events.Any(e => e.Name == "CanaryViolation");
-        Assert.IsTrue(hasViolationEvent, "A canary-violating dispose must add a CanaryViolation event to the rental activity.");
+        Assert.Contains(e => e.Name == "CanaryViolation", rentActivity.Events, "A canary-violating dispose must add a CanaryViolation event to the rental activity.");
 
         Assert.AreEqual(1, violationCount, "The canary-violations counter must observe exactly one violation.");
     }

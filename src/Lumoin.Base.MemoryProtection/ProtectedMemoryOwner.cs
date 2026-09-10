@@ -32,14 +32,14 @@ internal sealed unsafe class ProtectedMemoryOwner: MemoryManager<byte>
     /// <summary>
     /// The exact rented length in bytes; the length of every span and memory handed out.
     /// </summary>
-    private readonly int length;
+    private int Length { get; }
 
     /// <summary>
     /// The full page-rounded allocation length in bytes — the range that was locked and the range
     /// that is zeroed, unlocked, and freed on disposal. Validated to fit an <see cref="int"/> at
     /// allocation time so the disposal wipe can span it with a single <see cref="Span{T}"/>.
     /// </summary>
-    private readonly int lockedLength;
+    private int LockedLength { get; }
 
     /// <summary>
     /// The page-aligned allocation pointer. Zero once disposed; claimed atomically so the region
@@ -58,8 +58,8 @@ internal sealed unsafe class ProtectedMemoryOwner: MemoryManager<byte>
     public ProtectedMemoryOwner(nint pointer, int length, int lockedLength)
     {
         this.pointer = pointer;
-        this.length = length;
-        this.lockedLength = lockedLength;
+        Length = length;
+        LockedLength = lockedLength;
     }
 
 
@@ -85,7 +85,7 @@ internal sealed unsafe class ProtectedMemoryOwner: MemoryManager<byte>
         nint currentPointer = pointer;
         ObjectDisposedException.ThrowIf(currentPointer == 0, this);
 
-        return new Span<byte>((void*)currentPointer, length);
+        return new Span<byte>((void*)currentPointer, Length);
     }
 
 
@@ -103,7 +103,7 @@ internal sealed unsafe class ProtectedMemoryOwner: MemoryManager<byte>
     public override MemoryHandle Pin(int elementIndex = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(elementIndex);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(elementIndex, length);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(elementIndex, Length);
 
         nint currentPointer = pointer;
         ObjectDisposedException.ThrowIf(currentPointer == 0, this);
@@ -137,15 +137,15 @@ internal sealed unsafe class ProtectedMemoryOwner: MemoryManager<byte>
         {
             //Zero while the pages are still locked and resident, so the wipe cannot race a
             //swap-out; only then release the lock and the pages.
-            CryptographicOperations.ZeroMemory(new Span<byte>((void*)claimedPointer, lockedLength));
+            CryptographicOperations.ZeroMemory(new Span<byte>((void*)claimedPointer, LockedLength));
 
             if(OperatingSystem.IsWindows())
             {
-                _ = NativeMethods.VirtualUnlock((void*)claimedPointer, (nuint)lockedLength);
+                _ = NativeMethods.VirtualUnlock((void*)claimedPointer, (nuint)LockedLength);
             }
             else
             {
-                _ = NativeMethods.Munlock((void*)claimedPointer, (nuint)lockedLength);
+                _ = NativeMethods.Munlock((void*)claimedPointer, (nuint)LockedLength);
             }
 
             NativeMemory.AlignedFree((void*)claimedPointer);

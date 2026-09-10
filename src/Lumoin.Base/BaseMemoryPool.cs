@@ -211,8 +211,7 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
     /// <summary>
     /// Lazy singleton backing the <see cref="Shared"/> property.
     /// </summary>
-    private static readonly Lazy<BaseMemoryPool> SharedInstance =
-        new(() => new BaseMemoryPool());
+    private static Lazy<BaseMemoryPool> SharedInstance { get; } = new(() => new BaseMemoryPool());
 
     /// <summary>
     /// Gets a shared singleton instance of the memory pool.
@@ -411,19 +410,15 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
 
-        if(bufferSize <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(bufferSize),
-                "Buffer size must be greater than zero.");
-        }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bufferSize);
 
-        //Native is the only kind that lives outside this assembly. When a backing is wired it allocates
-        //per rent; when not, the request either degrades to Pinned — the strongest protection this
-        //browser-clean leaf offers without a P/Invoke dependency — or fails loud, depending on
-        //AllowNativeDegradation. The decision is made (and any throw raised) before the tracing activity is
-        //started, so a disallowed-degradation request never leaves a dangling activity behind.
+        //Native is the only kind that lives outside this assembly. When a backing is wired the rental is
+        //served per NativeRentMode below; when not, the request either degrades to Pinned — the strongest
+        //protection this browser-clean leaf offers without a P/Invoke dependency — or fails loud, depending
+        //on AllowNativeDegradation. The decision is made (and any throw raised) before the tracing activity
+        //is started, so a disallowed-degradation request never leaves a dangling activity behind.
         AllocationKind effectiveKind = kind;
-        bool degradedFromNative = false;
+        bool isDegradedFromNative = false;
         if(kind == AllocationKind.Native && NativeBacking is null)
         {
             if(!AllowNativeDegradation)
@@ -433,7 +428,7 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
             }
 
             effectiveKind = AllocationKind.Pinned;
-            degradedFromNative = true;
+            isDegradedFromNative = true;
         }
 
         //Single activity spans the entire rental lifecycle from rent to return.
@@ -459,9 +454,9 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
             activity?.AddTag("nativeRentMode", NativeRentMode.ToString());
         }
 
-        if(degradedFromNative)
+        if(isDegradedFromNative)
         {
-            activity?.AddTag("requestedAllocationKind", AllocationKind.Native.ToString());
+            activity?.AddTag("requestedAllocationKind", nameof(AllocationKind.Native));
             activity?.AddEvent(new ActivityEvent("AllocationKindDegraded", tags: new ActivityTagsCollection
             {
                 { "requested", "Native" },
@@ -529,8 +524,8 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
                 Interlocked.Add(ref totalMemoryAllocated, (long)bufferSize * capacity);
                 Interlocked.Add(ref totalSegments, capacity);
 
-                bool rentSuccess = availableSlab.TryRent(out rentedIndex);
-                Debug.Assert(rentSuccess, "New slab should always have available capacity.");
+                bool isRentSuccessful = availableSlab.TryRent(out rentedIndex);
+                Debug.Assert(isRentSuccessful, "New slab should always have available capacity.");
             }
 
             Interlocked.Increment(ref activeRentals);
@@ -735,8 +730,8 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
                 Interlocked.Add(ref totalMemoryAllocated, freshSlab.RegionLength);
                 Interlocked.Add(ref totalSegments, capacity);
 
-                bool rentSuccess = freshSlab.TryRent(out int segmentIndex);
-                Debug.Assert(rentSuccess, "A new native slab should always have available capacity.");
+                bool isRentSuccessful = freshSlab.TryRent(out int segmentIndex);
+                Debug.Assert(isRentSuccessful, "A new native slab should always have available capacity.");
 
                 Interlocked.Increment(ref activeRentals);
 
@@ -773,12 +768,14 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
                 {
                     Interlocked.Increment(ref activeRentals);
                     rental = new NativeSlabMemoryOwner(nativeSlab, segmentIndex, this, activity);
+
                     return true;
                 }
             }
         }
 
         rental = null;
+
         return false;
     }
 
@@ -906,16 +903,8 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         /// </exception>
         public Slab(int segmentSize, int segmentCount, bool pinned)
         {
-            if(segmentSize <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(segmentSize),
-                    "Segment size must be greater than zero.");
-            }
-            if(segmentCount <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(segmentCount),
-                    "Segment count must be greater than zero.");
-            }
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(segmentSize);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(segmentCount);
 
             //The backing length is computed in 64-bit and bound-checked before the array is allocated, so a
             //large segment size times the slab capacity cannot silently overflow the int multiply into a
@@ -952,11 +941,6 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         /// </summary>
         public bool IsFull => AvailableSegments.Count == SegmentCount;
 
-        /// <summary>
-        /// Gets a value indicating whether any segments are available for rent.
-        /// </summary>
-        public bool HasAvailableSegments => AvailableSegments.Count > 0;
-
 
         /// <summary>
         /// Attempts to rent a segment from this slab.
@@ -974,6 +958,7 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
             if(IsDisposed)
             {
                 index = -1;
+
                 return false;
             }
 
@@ -984,10 +969,12 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
 
                 RentedSegments[segmentIndex] = true;
                 index = segmentIndex;
+
                 return true;
             }
 
             index = -1;
+
             return false;
         }
 
@@ -1014,13 +1001,10 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         /// <exception cref="ObjectDisposedException">Thrown when the slab has been disposed.</exception>
         public void Return(int index)
         {
-            ObjectDisposedException.ThrowIf(IsDisposed, nameof(Slab));
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
 
-            if(index < 0 || index >= SegmentCount)
-            {
-                throw new ArgumentOutOfRangeException(nameof(index),
-                    "Segment index is outside the range of this slab.");
-            }
+            ArgumentOutOfRangeException.ThrowIfNegative(index);
+            ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, SegmentCount);
 
             //Double-return protection: verify the segment is actually rented.
             if(!RentedSegments[index])
@@ -1121,7 +1105,8 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         {
             get
             {
-                ObjectDisposedException.ThrowIf(Disposed, nameof(SlabMemoryOwner));
+                ObjectDisposedException.ThrowIf(Disposed, this);
+
                 return Slab.SliceFor(Index);
             }
         }
@@ -1177,9 +1162,10 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
 
     /// <summary>
     /// Provides ownership of a native (locked) memory buffer supplied per rent by an injected
-    /// <see cref="NativeBackingAllocator"/>. Native rentals are not slab-pooled; the wrapped owner is
-    /// responsible for zeroing, unlocking and freeing its memory on disposal. This wrapper threads the
-    /// lifecycle activity and the pool's return accounting.
+    /// <see cref="NativeBackingAllocator"/> in <see cref="Lumoin.Base.NativeRentMode.PerRentIsolated"/>
+    /// mode. Such rentals are never slab-pooled; the wrapped owner is responsible for zeroing, unlocking
+    /// and freeing its memory on disposal. This wrapper threads the lifecycle activity and the pool's
+    /// return accounting.
     /// </summary>
     [DebuggerDisplay("NativeMemoryOwner: Disposed={Disposed}")]
     private sealed class NativeMemoryOwner: IMemoryOwner<byte>
@@ -1227,7 +1213,8 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         {
             get
             {
-                ObjectDisposedException.ThrowIf(Disposed, nameof(NativeMemoryOwner));
+                ObjectDisposedException.ThrowIf(Disposed, this);
+
                 return Inner.Memory;
             }
         }
@@ -1351,12 +1338,12 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         /// under a live rental would be a native use-after-free, unlike the managed tier where a
         /// disposed slab's array remains a valid object.
         /// </summary>
-        private bool disposeWhenIdle;
+        private bool ShouldDisposeWhenIdle { get; set; }
 
         /// <summary>
         /// The number of segments permanently taken out of circulation by canary violations.
         /// </summary>
-        private int retiredSegments;
+        private int RetiredSegments { get; set; }
 
 
         /// <summary>
@@ -1376,11 +1363,7 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         /// </exception>
         public static NativeSlab Create(int segmentSize, int segmentCount, NativeBackingAllocator backing)
         {
-            if(segmentCount <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(segmentCount),
-                    "Segment count must be greater than zero.");
-            }
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(segmentCount);
 
             //Mirrors the managed slab's 64-bit bound check: the region length must fit the int the
             //backing seam takes, so the multiply can never wrap into a too-small region that a
@@ -1419,8 +1402,7 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
             RegionLength = regionLength;
             Region = region;
 
-            CanaryTemplate = new byte[CanarySize];
-            RandomNumberGenerator.Fill(CanaryTemplate);
+            CanaryTemplate = RandomNumberGenerator.GetBytes(CanarySize);
 
             //Canaries are laid down for every segment up front so a segment's brackets are
             //verifiable over its whole lifetime, not only after its first rent.
@@ -1447,7 +1429,7 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         /// Gets a value indicating whether this slab has no active rentals — every segment is
         /// either available or retired — making its locked region reclaimable.
         /// </summary>
-        public bool IsFull => AvailableSegments.Count + retiredSegments == SegmentCount;
+        public bool IsFull => AvailableSegments.Count + RetiredSegments == SegmentCount;
 
 
         /// <summary>
@@ -1466,6 +1448,7 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
             if(IsDisposed)
             {
                 index = -1;
+
                 return false;
             }
 
@@ -1476,10 +1459,12 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
 
                 RentedSegments[segmentIndex] = true;
                 index = segmentIndex;
+
                 return true;
             }
 
             index = -1;
+
             return false;
         }
 
@@ -1511,13 +1496,10 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         /// <exception cref="ObjectDisposedException">Thrown when the slab has been disposed.</exception>
         public void Return(int index)
         {
-            ObjectDisposedException.ThrowIf(IsDisposed, nameof(NativeSlab));
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
 
-            if(index < 0 || index >= SegmentCount)
-            {
-                throw new ArgumentOutOfRangeException(nameof(index),
-                    "Segment index is outside the range of this native slab.");
-            }
+            ArgumentOutOfRangeException.ThrowIfNegative(index);
+            ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, SegmentCount);
 
             //Double-return protection: verify the segment is actually rented.
             if(!RentedSegments[index])
@@ -1527,8 +1509,8 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
             }
 
             var regionSpan = Region.Memory.Span;
-            bool leadingIntact = regionSpan.Slice(index * Stride, CanarySize).SequenceEqual(CanaryTemplate);
-            bool trailingIntact = regionSpan.Slice((index * Stride) + CanarySize + SegmentSize, CanarySize).SequenceEqual(CanaryTemplate);
+            bool isLeadingIntact = regionSpan.Slice(index * Stride, CanarySize).SequenceEqual(CanaryTemplate);
+            bool isTrailingIntact = regionSpan.Slice((index * Stride) + CanarySize + SegmentSize, CanarySize).SequenceEqual(CanaryTemplate);
 
             //The secret is zeroed on every exit path, violation or not — house discipline is
             //CryptographicOperations.ZeroMemory (never Span.Clear), which the compiler cannot elide.
@@ -1536,20 +1518,21 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
 
             RentedSegments[index] = false;
 
-            if(leadingIntact && trailingIntact)
+            if(isLeadingIntact && isTrailingIntact)
             {
                 AvailableSegments.Push(index);
                 DisposeIfIdleAndMarked();
+
                 return;
             }
 
             //A stomped canary means something wrote outside the rented exact-size span — native
             //interop handed a wrong length, or genuine corruption. The segment is retired rather
             //than recycled, and the failure surfaces loudly to the disposer.
-            retiredSegments++;
-            string stomped = !leadingIntact && !trailingIntact
+            RetiredSegments++;
+            string stomped = !isLeadingIntact && !isTrailingIntact
                 ? "leading and trailing canaries"
-                : !leadingIntact ? "leading canary" : "trailing canary";
+                : !isLeadingIntact ? "leading canary" : "trailing canary";
             DisposeIfIdleAndMarked();
 
             throw new CanaryViolationException(
@@ -1568,10 +1551,11 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
             if(IsFull)
             {
                 Dispose();
+
                 return;
             }
 
-            disposeWhenIdle = true;
+            ShouldDisposeWhenIdle = true;
         }
 
 
@@ -1581,7 +1565,7 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         /// </summary>
         private void DisposeIfIdleAndMarked()
         {
-            if(disposeWhenIdle && IsFull)
+            if(ShouldDisposeWhenIdle && IsFull)
             {
                 Dispose();
             }
@@ -1666,7 +1650,8 @@ public sealed class BaseMemoryPool: MemoryPool<byte>
         {
             get
             {
-                ObjectDisposedException.ThrowIf(Disposed, nameof(NativeSlabMemoryOwner));
+                ObjectDisposedException.ThrowIf(Disposed, this);
+
                 return Slab.SliceFor(Index);
             }
         }

@@ -7,8 +7,8 @@ namespace Lumoin.Base;
 public enum AllocationKind
 {
     /// <summary>
-    /// Ordinary managed heap. The default. Relocation is harmless for short-lived scratch, and this
-    /// keeps the high-volume path (serialization, canonicalization, codecs) performing as before.
+    /// Ordinary managed heap. The default. Relocation is harmless for short-lived scratch, so the
+    /// high-volume path (serialization, canonicalization, codecs) pays no pinning or locking cost.
     /// </summary>
     Managed = 0,
 

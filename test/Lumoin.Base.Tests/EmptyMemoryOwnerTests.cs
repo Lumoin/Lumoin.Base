@@ -17,11 +17,11 @@ public sealed class EmptyMemoryOwnerTests
         var firstRead = EmptyMemoryOwner.Instance;
         var secondRead = EmptyMemoryOwner.Instance;
         Assert.AreSame(firstRead, secondRead);
-        Assert.HasCount(0, EmptyMemoryOwner.Instance.Memory);
+        Assert.IsEmpty(EmptyMemoryOwner.Instance.Memory);
 
         //No-op dispose: safe to call repeatedly, and the instance stays usable afterwards.
         EmptyMemoryOwner.Instance.Dispose();
         EmptyMemoryOwner.Instance.Dispose();
-        Assert.HasCount(0, EmptyMemoryOwner.Instance.Memory);
+        Assert.IsEmpty(EmptyMemoryOwner.Instance.Memory);
     }
 }

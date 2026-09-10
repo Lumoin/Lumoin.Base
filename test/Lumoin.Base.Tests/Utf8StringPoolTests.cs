@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -153,6 +154,22 @@ public sealed class Utf8StringPoolTests
 
 
     [TestMethod]
+    public void InternSingleSegmentSequenceAvoidsTheScratchBufferCopy()
+    {
+        CountingMemoryPool countingPool = new();
+        using Utf8StringPool pool = new(countingPool);
+        int rentsAfterConstruction = countingPool.RentCount;
+
+        byte[] bytes = Encoding.UTF8.GetBytes("http://example.org/resource");
+        Utf8String interned = pool.Intern(new ReadOnlySequence<byte>(bytes));
+
+        Assert.AreEqual(rentsAfterConstruction, countingPool.RentCount,
+            "A single-segment sequence must take the direct-span fast path without renting a scratch buffer.");
+        Assert.AreEqual("http://example.org/resource", interned.ToString());
+    }
+
+
+    [TestMethod]
     public void InternMultiSegmentSequenceDeduplicatesWithSpan()
     {
         using Utf8StringPool pool = new();
@@ -238,6 +255,51 @@ public sealed class Utf8StringPoolTests
 
         Assert.AreEqual("pinned-term", interned.ToString());
         Assert.AreEqual(interned, pool.Intern("pinned-term"u8));
+    }
+
+
+    [TestMethod]
+    [DataRow(AllocationKind.Managed, "Managed")]
+    [DataRow(AllocationKind.Pinned, "Pinned")]
+    public void InterningRoutesThroughTheChosenAllocationKind(AllocationKind allocationKind, string expectedTag)
+    {
+        //The BaseMemoryPool ActivitySource is process-wide; only activities under this test's own trace count.
+        Activity.Current = null;
+
+        using var testRoot = new Activity(nameof(InterningRoutesThroughTheChosenAllocationKind));
+        testRoot.Start();
+        var testTraceId = testRoot.TraceId;
+
+        var activities = new List<Activity>();
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BaseMemoryPool",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = activity =>
+            {
+                if(activity.TraceId == testTraceId)
+                {
+                    activities.Add(activity);
+                }
+            }
+        };
+
+        ActivitySource.AddActivityListener(activityListener);
+
+        using var meter = new Meter("Test.Utf8StringPool.AllocationKindRouting", "1.0.0");
+        using var basePool = new BaseMemoryPool(meter);
+        using var pool = new Utf8StringPool(basePool, allocationKind: allocationKind);
+
+        pool.Intern("term"u8);
+
+        testRoot.Stop();
+
+        //Constructing the pool rents its first arena slab through RentBuffer, which is where the
+        //chosen AllocationKind is threaded into the underlying BaseMemoryPool.Rent(size, kind) call.
+        var slabRent = activities.FirstOrDefault(a => a.OperationName == "Rent");
+        Assert.IsNotNull(slabRent, "Constructing the pool must rent its first arena slab.");
+        Assert.AreEqual(expectedTag, slabRent.GetTagItem("allocationKind")?.ToString(),
+            $"The arena slab must be rented with allocationKind {expectedTag}.");
     }
 
 
@@ -366,6 +428,26 @@ public sealed class Utf8StringPoolTests
 
 
     [TestMethod]
+    public void ResetReturnsEverySlabWhenMoreThanOneWasRented()
+    {
+        CountingMemoryPool countingPool = new();
+        using Utf8StringPool pool = new(countingPool, slabSize: 8);
+
+        //A small slab forces a second arena slab once packing overflows it.
+        pool.Intern("abc"u8);
+        pool.Intern("defg"u8);
+        pool.Intern("hi"u8);
+        Assert.IsGreaterThanOrEqualTo(2, countingPool.RentCount, "Packing past the slab size must rent a second arena slab.");
+
+        pool.Reset();
+
+        //Reset disposes every slab rented up to that point, then rents exactly one fresh slab for reuse.
+        Assert.AreEqual(countingPool.RentCount - 1, countingPool.DisposeCount,
+            "Reset must return every previously rented slab, not just the active one.");
+    }
+
+
+    [TestMethod]
     public void CountAfterDisposeThrows()
     {
         Utf8StringPool pool = new();
@@ -461,6 +543,41 @@ public sealed class Utf8StringPoolTests
             Next = next;
 
             return next;
+        }
+    }
+
+
+    /// <summary>
+    /// A <see cref="MemoryPool{T}"/> stand-in that counts rents and returns, so a test can prove whether a
+    /// code path rented an extra (scratch or arena) buffer, or that every previously rented buffer was
+    /// actually released.
+    /// </summary>
+    private sealed class CountingMemoryPool: MemoryPool<byte>
+    {
+        public int RentCount { get; private set; }
+
+        public int DisposeCount { get; private set; }
+
+        public override int MaxBufferSize => int.MaxValue;
+
+        public override IMemoryOwner<byte> Rent(int minBufferSize = -1)
+        {
+            RentCount++;
+            int size = minBufferSize < 0 ? 4096 : minBufferSize;
+
+            return new CountingOwner(new byte[size], this);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+        }
+
+
+        private sealed class CountingOwner(byte[] buffer, CountingMemoryPool pool): IMemoryOwner<byte>
+        {
+            public Memory<byte> Memory => buffer;
+
+            public void Dispose() => pool.DisposeCount++;
         }
     }
 }

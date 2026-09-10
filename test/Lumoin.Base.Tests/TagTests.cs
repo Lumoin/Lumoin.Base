@@ -10,8 +10,8 @@ namespace Lumoin.Base.Tests;
 public sealed class TagTests
 {
     /// <summary>
-    /// A struct value stands in for the crypto-context "dynamic enum" structs (MaterialSemantics etc.),
-    /// the case the old record-over-dictionary equality got wrong.
+    /// A struct value stands in for the crypto-context "dynamic enum" structs (MaterialSemantics etc.):
+    /// a boxed struct entry must take part in content equality by value, not by box identity.
     /// </summary>
     private readonly record struct Kind(int Code);
 
@@ -94,12 +94,12 @@ public sealed class TagTests
     [TestMethod]
     public void EqualityIsByContentAcrossDistinctInstances()
     {
-        //The regression that motivated the bespoke type: a record over a FrozenDictionary compared the
-        //dictionaries by reference, so these would have been UNEQUAL despite identical content.
+        //Two independently built tags with identical content must be equal: Tag compares its entries by
+        //content, whereas a record over a FrozenDictionary compares the dictionaries by reference.
         Tag a = Tag.Create(42).With("hello").With(new Kind(7));
         Tag b = Tag.Create(42).With("hello").With(new Kind(7));
 
-        Assert.IsFalse(ReferenceEquals(a, b));
+        Assert.AreNotSame(a, b);
         Assert.AreEqual(a, b);
         Assert.IsTrue(a == b);
         Assert.IsFalse(a != b);
@@ -128,6 +128,54 @@ public sealed class TagTests
         Assert.AreNotEqual(a, b);
         Assert.AreNotEqual(a, c);
         Assert.IsTrue(a != b);
+    }
+
+
+    [TestMethod]
+    [DataRow(null)]
+    public void NullComparisonsAreConsistent(Tag? nullTag)
+    {
+        //The null comes in through a parameter (rather than a literal) so the compiler cannot prove the
+        //comparisons below are dead code — the whole point of the test is exercising them at runtime.
+        Tag tag = Tag.Create(42);
+
+        Assert.IsFalse(tag.Equals(nullTag));
+        Assert.IsFalse(tag == nullTag);
+        Assert.IsFalse(nullTag == tag);
+        Assert.IsTrue(tag != nullTag);
+    }
+
+
+    [TestMethod]
+    public void ObjectEqualsMatchesTypedEqualityAndRejectsOtherTypes()
+    {
+        Tag a = Tag.Create(42).With("hello");
+        Tag b = Tag.Create(42).With("hello");
+
+        Assert.IsTrue(((object)a).Equals(b));
+        Assert.IsFalse(((object)a).Equals("not a tag"));
+    }
+
+
+    [TestMethod]
+    public void ToStringFormatsEmptyAndSingleEntryTags()
+    {
+        Assert.AreEqual("Tag: (empty)", Tag.Empty.ToString());
+        Assert.AreEqual("Tag: [Int32=42]", Tag.Create(42).ToString());
+    }
+
+
+    [TestMethod]
+    public void ToStringFormatsTwoEntryTagWithBracketsAndBothEntries()
+    {
+        //FrozenDictionary order is unspecified, so a multi-entry tag can only be asserted structurally and
+        //by substring — no exact full-string comparison, unlike the single-entry case above.
+        string result = Tag.Create(42).With("hello").ToString();
+
+        Assert.IsTrue(result.StartsWith("Tag: [", StringComparison.Ordinal), $"'{result}' should start with 'Tag: ['.");
+        Assert.AreEqual(']', result[^1], $"'{result}' should end with ']'.");
+        Assert.Contains("Int32=42", result, "The Int32 entry must be present.");
+        Assert.Contains("String=hello", result, "The String entry must be present.");
     }
 
 

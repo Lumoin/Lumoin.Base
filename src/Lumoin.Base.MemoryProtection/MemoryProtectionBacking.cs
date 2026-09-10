@@ -129,7 +129,7 @@ public static class MemoryProtectionBacking
                     NativeMemory.AlignedFree(pointer);
 
                     throw new InsufficientMemoryException(
-                        $"VirtualLock failed with Win32 error {error} for a {lockedLength}-byte region. Windows caps locked pages by the process minimum working set; raise it with SetProcessWorkingSetSize to hold more locked memory.");
+                        $"VirtualLock failed with Win32 error {error} ({Marshal.GetPInvokeErrorMessage(error)}) for a {lockedLength}-byte region. Windows caps locked pages by the process minimum working set; raise it with SetProcessWorkingSetSize to hold more locked memory.");
                 }
             }
             else
@@ -140,7 +140,7 @@ public static class MemoryProtectionBacking
                     NativeMemory.AlignedFree(pointer);
 
                     throw new InsufficientMemoryException(
-                        $"mlock failed with errno {error} for a {lockedLength}-byte region. The locked-memory limit (RLIMIT_MEMLOCK, e.g. `ulimit -l`) likely needs raising; on Android the budget is famously 64 KB.");
+                        $"mlock failed with errno {error} ({Marshal.GetPInvokeErrorMessage(error)}) for a {lockedLength}-byte region. The locked-memory limit (RLIMIT_MEMLOCK, e.g. `ulimit -l`) likely needs raising; on Android the budget is famously 64 KB.");
                 }
 
                 if(OperatingSystem.IsLinux() || OperatingSystem.IsAndroid())

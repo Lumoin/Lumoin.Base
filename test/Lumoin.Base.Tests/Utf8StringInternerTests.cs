@@ -234,7 +234,7 @@ public sealed class Utf8StringInternerTests
         {
             byte[] bytes = Encoding.UTF8.GetBytes($"value-{i}");
             Utf8String interned = interner.Intern(bytes);
-            Assert.IsTrue(interned.SequenceEqual(bytes), "Every interned value must round-trip its bytes.");
+            Assert.AreSequenceEqual(bytes, interned, "Every interned value must round-trip its bytes.");
         });
 
         //20,000 unique values stream through under contention; eviction keeps the live set near twice MaxEntries.
@@ -264,6 +264,52 @@ public sealed class Utf8StringInternerTests
 
 
     [TestMethod]
+    public void ValueAtExactlyMaxValueLengthIsCachedButOneByteOverIsNot()
+    {
+        const int maxValueLength = 8;
+        Utf8StringInterner interner = new(maxValueLength: maxValueLength);
+
+        byte[] atLimit = Encoding.UTF8.GetBytes(new string('x', maxValueLength));
+        byte[] overLimit = Encoding.UTF8.GetBytes(new string('x', maxValueLength + 1));
+
+        Utf8String first = interner.Intern(atLimit);
+        Utf8String second = interner.Intern(atLimit);
+        Assert.AreEqual(first, second);
+        Assert.AreEqual(1, interner.Count, "A value of exactly MaxValueLength bytes must be cached.");
+
+        interner.Intern(overLimit);
+        Assert.AreEqual(1, interner.Count, "A value one byte past MaxValueLength must be returned uncached.");
+    }
+
+
+    [TestMethod]
+    public void InternAndTryInternRoundTripAcrossTheStackallocBoundary()
+    {
+        //Encoding.UTF8.GetMaxByteCount(charCount) computes (charCount + 1) * 3. An 84-char string gives
+        //85 * 3 = 255 bytes (<= the interner's 256-byte MaxStackallocBytes, so Intern(string) and
+        //TryIntern(string, out _) take the stackalloc path); an 85-char string gives 86 * 3 = 258 bytes
+        //(> 256, so they take the ArrayPool-backed path instead). Both must produce the same bytes as
+        //interning the UTF-8 span directly.
+        string stackallocBoundary = new('a', 84);
+        string pooledBoundary = new('b', 85);
+
+        Utf8StringInterner interner = new();
+
+        Utf8String internedStackalloc = interner.Intern(stackallocBoundary);
+        Assert.AreEqual(interner.Intern(Encoding.UTF8.GetBytes(stackallocBoundary)), internedStackalloc);
+
+        Utf8String internedPooled = interner.Intern(pooledBoundary);
+        Assert.AreEqual(interner.Intern(Encoding.UTF8.GetBytes(pooledBoundary)), internedPooled);
+
+        Assert.IsTrue(interner.TryIntern(stackallocBoundary, out Utf8String tryStackalloc));
+        Assert.AreEqual(internedStackalloc, tryStackalloc);
+
+        Assert.IsTrue(interner.TryIntern(pooledBoundary, out Utf8String tryPooled));
+        Assert.AreEqual(internedPooled, tryPooled);
+    }
+
+
+    [TestMethod]
     public void ConstructorRejectsNonPositiveMaxValueLength()
     {
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new Utf8StringInterner(maxValueLength: 0));
@@ -287,6 +333,7 @@ public sealed class Utf8StringInternerTests
                 l.EnableMeasurementEvents(instrument);
             }
         };
+
         listener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
         {
             if(instrument.Name == Utf8StringInternerMetrics.InternOperationsTotal)
@@ -302,6 +349,7 @@ public sealed class Utf8StringInternerTests
                 rotations += measurement;
             }
         });
+
         listener.Start();
 
         Utf8StringInterner interner = new(maxEntries: 4, meter: meter);
@@ -315,6 +363,47 @@ public sealed class Utf8StringInternerTests
         Assert.IsGreaterThanOrEqualTo(14, operations, "Every intern call records an operation.");
         Assert.IsGreaterThanOrEqualTo(1, hits, "The repeated value records a hit.");
         Assert.IsGreaterThanOrEqualTo(1, rotations, "Filling past MaxEntries records rotations.");
+    }
+
+
+    [TestMethod]
+    public void RotationTriggersExactlyAtTheHotGenerationBoundary()
+    {
+        //Rotate() fires when Interlocked.Increment(ref HotCount) >= MaxEntries. HotCount only advances on a
+        //genuine add to the hot table, so with maxEntries 4 the first three DISTINCT values must record zero
+        //rotations and the fourth must tip HotCount to 4 and rotate exactly once.
+        const int maxEntries = 4;
+
+        using Meter meter = new("Test.Utf8StringInterner.RotationBoundary");
+        long rotations = 0;
+
+        using MeterListener listener = new();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if(instrument.Meter == meter && instrument.Name == Utf8StringInternerMetrics.RotationsTotal)
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
+        {
+            Interlocked.Add(ref rotations, measurement);
+        });
+
+        listener.Start();
+
+        Utf8StringInterner interner = new(maxEntries: maxEntries, meter: meter);
+
+        interner.Intern("a"u8);
+        interner.Intern("b"u8);
+        interner.Intern("c"u8);
+
+        Assert.AreEqual(0L, Interlocked.Read(ref rotations), "Three distinct values below MaxEntries must not rotate.");
+
+        interner.Intern("d"u8);
+
+        Assert.AreEqual(1L, Interlocked.Read(ref rotations), "The fourth distinct value tips HotCount to MaxEntries and rotates exactly once.");
     }
 
 
@@ -489,7 +578,7 @@ public sealed class Utf8StringInternerTests
 
             byte[] bytes = Encoding.UTF8.GetBytes($"value-{i}");
             Utf8String interned = interner.Intern(bytes);
-            Assert.IsTrue(interned.SequenceEqual(bytes), "A value interned during a Clear must never be torn.");
+            Assert.AreSequenceEqual(bytes, interned, "A value interned during a Clear must never be torn.");
         });
 
         //A final Clear with no concurrent interning must leave the interner empty.

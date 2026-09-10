@@ -64,7 +64,7 @@ public sealed class LibsodiumCryptoTests
         int result = LibsodiumCrypto.SignSeedKeypair(publicKey, scratch, seed);
 
         Assert.AreEqual(0, result, "crypto_sign_seed_keypair should succeed.");
-        Assert.IsTrue(publicKey.SequenceEqual(expectedPublicKey), "The derived public key must match the RFC 8032 test vector.");
+        Assert.AreSequenceEqual(expectedPublicKey.AsSpan(), publicKey, "The derived public key must match the RFC 8032 test vector.");
     }
 
 
@@ -92,7 +92,7 @@ public sealed class LibsodiumCryptoTests
         Span<byte> signature = stackalloc byte[LibsodiumCrypto.Ed25519SignatureLength];
         ReadOnlySpan<byte> message = [];
         Assert.AreEqual(0, LibsodiumCrypto.SignDetached(signature, message, scratch), "crypto_sign_detached should succeed.");
-        Assert.IsTrue(signature.SequenceEqual(expectedSignature), "The signature must match the RFC 8032 test vector.");
+        Assert.AreSequenceEqual(expectedSignature.AsSpan(), signature, "The signature must match the RFC 8032 test vector.");
 
         Assert.AreEqual(0, LibsodiumCrypto.VerifyDetached(signature, message, publicKey), "A valid signature must verify.");
     }
@@ -137,7 +137,7 @@ public sealed class LibsodiumCryptoTests
         Assert.AreEqual(0, LibsodiumCrypto.ScalarMult(sharedA, scalarA, publicB), "crypto_scalarmult should succeed for A.");
         Assert.AreEqual(0, LibsodiumCrypto.ScalarMult(sharedB, scalarB, publicA), "crypto_scalarmult should succeed for B.");
 
-        Assert.IsTrue(sharedA.SequenceEqual(sharedB), "Both sides of the X25519 exchange must derive the same shared point.");
+        Assert.AreSequenceEqual(sharedB, sharedA, "Both sides of the X25519 exchange must derive the same shared point.");
     }
 
 

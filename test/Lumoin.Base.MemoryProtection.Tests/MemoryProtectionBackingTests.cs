@@ -13,8 +13,8 @@ namespace Lumoin.Base.MemoryProtection.Tests;
 /// <see cref="NativeRentMode.PerRentIsolated"/> and <see cref="NativeRentMode.ProtectedSlab"/>)
 /// against the real OS locking mechanism (<c>VirtualLock</c>/<c>mlock</c>). Unlike the Sodium
 /// suite, every test here runs unconditionally: <see cref="MemoryProtectionBacking.IsSupported"/>
-/// is true on this dev box and on every CI leg (ubuntu/windows/macos/ubuntu-arm), so there is no
-/// graceful-skip machinery to model.
+/// is true on every CI leg (ubuntu/windows/macos/ubuntu-arm) and on every desktop host, so there
+/// is no graceful-skip machinery to model.
 /// </summary>
 [TestClass]
 public sealed class MemoryProtectionBackingTests
@@ -25,7 +25,7 @@ public sealed class MemoryProtectionBackingTests
     [TestMethod]
     public void IsSupportedIsTrueOnThisPlatform()
     {
-        //Every CI leg and this dev box has a supported locking mechanism, so this holds
+        //Every CI leg and every desktop host has a supported locking mechanism, so this holds
         //unconditionally — unlike SodiumBacking.IsAvailable, which probes for an optional native
         //library that may not be present.
         Assert.IsTrue(MemoryProtectionBacking.IsSupported, "This platform should have a supported memory-locking mechanism.");
@@ -43,8 +43,9 @@ public sealed class MemoryProtectionBackingTests
     [TestMethod]
     public void AllocateReturnsExactSizeZeroedAndUsable()
     {
-        //Sizes stay small on purpose: tests run method-parallel and every allocation locks whole
-        //pages against the platform budget (RLIMIT_MEMLOCK, the Windows working-set quota), so the
+        //Sizes stay small on purpose: tests run method-parallel ([assembly: Parallelize] is
+        //method-scoped) and every allocation locks whole pages against the platform budget
+        //(RLIMIT_MEMLOCK, the Windows working-set quota), so the
         //suite's worst-case concurrent locked footprint must sit far below common defaults. The
         //strict InsufficientMemoryException budget-exhaustion path is deliberately NOT provoked
         //here — quotas are environment-dependent and a test that locks megabytes would be flaky.
@@ -127,6 +128,7 @@ public sealed class MemoryProtectionBackingTests
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => manager.Pin(65));
 
         using(manager.Pin(0)) { }
+
         using(manager.Pin(64)) { }
     }
 
@@ -148,6 +150,27 @@ public sealed class MemoryProtectionBackingTests
         {
             Assert.AreEqual((byte)i, memory.Span[i], $"Byte {i} written through the pinned handle should be visible via Memory.Span.");
         }
+    }
+
+
+    [TestMethod]
+    public unsafe void PinAtANonZeroOffsetAddressesThatByte()
+    {
+        using var owner = MemoryProtectionBacking.Allocate(64);
+        var manager = (MemoryManager<byte>)owner;
+
+        //Fill through GetSpan with a position-dependent pattern so each byte is distinguishable.
+        Span<byte> span = manager.GetSpan();
+        for(int i = 0; i < span.Length; i++)
+        {
+            span[i] = (byte)i;
+        }
+
+        const int offset = 40;
+        using MemoryHandle handle = manager.Pin(offset);
+
+        byte* pointer = (byte*)handle.Pointer;
+        Assert.AreEqual((byte)offset, pointer[0], "Pin(N) must address byte N, not byte 0.");
     }
 
 
@@ -228,6 +251,7 @@ public sealed class MemoryProtectionBackingTests
         IMemoryOwner<byte> CountingAllocate(int size)
         {
             Interlocked.Increment(ref callCount);
+
             return MemoryProtectionBacking.Allocate(size);
         }
 
@@ -312,8 +336,7 @@ public sealed class MemoryProtectionBackingTests
         Assert.IsNull(rentActivity.GetTagItem("requestedAllocationKind"),
             "A non-degraded Native rent must not carry a requestedAllocationKind tag.");
 
-        bool hasDegradedEvent = rentActivity.Events.Any(e => e.Name == "AllocationKindDegraded");
-        Assert.IsFalse(hasDegradedEvent, "A non-degraded Native rent must not emit an AllocationKindDegraded event.");
+        Assert.DoesNotContain(e => e.Name == "AllocationKindDegraded", rentActivity.Events, "A non-degraded Native rent must not emit an AllocationKindDegraded event.");
     }
 
 
