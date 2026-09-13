@@ -1,11 +1,11 @@
 name: Lumoin.Base wasm smoke
 
 # The natives job in main.yml builds, proves, and ships the browser-wasm libsodium archive on
-# every push: it builds the static library at the wasm-tools workload's pinned Emscripten and
+# every push: it builds the static library with the wasm-tools workload's own Emscripten and
 # runs this repository's Lumoin.Base.Libsodium.WasmSmoke app under Node as the execution gate.
-# This leg is the weekly drift detector between those pushes: it rebuilds the archive at whatever
-# Emscripten the workload currently pins and re-runs the same smoke, so a wasm-tools workload
-# update that bumps the pin or changes wasm marshalling surfaces here first.
+# This leg is the weekly drift detector between those pushes: it rebuilds the archive with
+# whatever Emscripten the workload currently ships and re-runs the same smoke, so a wasm-tools
+# workload update that bumps the toolchain or changes wasm marshalling surfaces here first.
 
 # Deliberately NOT triggered by push or pull_request: main.yml already builds and proves the
 # archive on every push, so triggering here too would only duplicate that gate. The weekly
@@ -45,9 +45,10 @@ jobs:
       uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
       with:
         disable-sudo: true
-        # Audit rather than block: the wasm-tools workload and the emsdk bootstrap download from
-        # endpoint sets that shift between SDK releases. Tighten to block with an explicit
-        # allowlist when this leg stops being experimental (.NET 11 GA).
+        # Audit rather than block: this weekly detector exists to surface drift, and a new endpoint
+        # in a workload update should be reported here rather than fail here (main.yml's natives
+        # leg runs the same install under block with its allowlist and is the gate). Tighten to
+        # block with that allowlist when this leg stops being experimental (.NET 11 GA).
         egress-policy: audit
 
     - name: Checkout code
@@ -73,33 +74,51 @@ jobs:
       working-directory: ${{ env.SMOKE_DIR }}
       run: dotnet workload install wasm-tools --include-previews
 
-    - name: Discover the workload's Emscripten pin
-      id: emsdk
+    # The same build as main.yml's browser-wasm natives leg: the workload's own emcc, pointed at
+    # the pack's LLVM, Binaryen and Node through the DOTNET_EMSCRIPTEN_* variables the wasm SDK
+    # exports when it links an app. The version is read from emscripten-version.txt, the file
+    # Sdk.props reads into $(EmscriptenVersion), never from the pack directory name (the RC1
+    # packs are named 6.0.2 but carry 6.0.3).
+    - name: Build static libsodium with the workload's Emscripten
       run: |
         set -euo pipefail
-        pin="$(ls "$DOTNET_ROOT/packs" | grep -oP '^Microsoft\.NET\.Runtime\.Emscripten\.\K[0-9]+\.[0-9]+\.[0-9]+(?=\.Sdk\.)' | head -n 1)"
-        test -n "$pin"
-        echo "Workload Emscripten pin: $pin"
-        echo "version=$pin" >> "$GITHUB_OUTPUT"
-
-    - name: Build static libsodium with the pinned Emscripten
-      run: |
-        set -euo pipefail
-        pin='${{ steps.emsdk.outputs.version }}'
-        git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
-        "$RUNNER_TEMP/emsdk/emsdk" install "$pin"
-        "$RUNNER_TEMP/emsdk/emsdk" activate "$pin"
-        source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+        sdk_tools="$(ls -d "$DOTNET_ROOT"/packs/Microsoft.NET.Runtime.Emscripten.*.Sdk.linux-x64/*/tools | head -n 1)"
+        node_bin="$(ls -d "$DOTNET_ROOT"/packs/Microsoft.NET.Runtime.Emscripten.*.Node.linux-x64/*/tools/bin | head -n 1)"
+        cache="$(ls -d "$DOTNET_ROOT"/packs/Microsoft.NET.Runtime.Emscripten.*.Cache.linux-x64/*/tools/emscripten/cache | head -n 1)"
+        version="$(tr -d '"[:space:]' < "$sdk_tools/emscripten/emscripten-version.txt")"
+        test -n "$version"
+        echo "Workload Emscripten version: $version"
+        export DOTNET_EMSCRIPTEN_LLVM_ROOT="$sdk_tools/bin"
+        export DOTNET_EMSCRIPTEN_BINARYEN_ROOT="$sdk_tools"
+        export DOTNET_EMSCRIPTEN_NODE_JS="$node_bin/node"
+        export EM_CACHE="$cache"
+        export EM_FROZEN_CACHE=1
+        export PATH="$sdk_tools/emscripten:$node_bin:$PATH"
+        banner="$(emcc --version | head -n 1)"
+        echo "$banner"
+        reported="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' <<< "$banner" | head -n 1 || true)"
+        [ "$reported" = "$version" ] || { echo "emcc reports '$reported' but emscripten-version.txt says $version."; exit 1; }
         mkdir -p "$RUNNER_TEMP/libsodium-src"
         curl -fsSL "https://github.com/jedisct1/libsodium/releases/download/${LIBSODIUM_TAG}/libsodium-${LIBSODIUM_VERSION}.tar.gz" | tar -xz -C "$RUNNER_TEMP/libsodium-src" --strip-components=1
         cd "$RUNNER_TEMP/libsodium-src"
         emconfigure ./configure --disable-shared --without-pthreads --disable-ssp --disable-asm --disable-pie --prefix="$RUNNER_TEMP/libsodium-wasm"
         emmake make -j"$(nproc)" install
         test -f "$RUNNER_TEMP/libsodium-wasm/lib/libsodium.a"
+        printf '%s\n' "$version" > "$RUNNER_TEMP/libsodium-wasm/emscripten-version"
 
     - name: Publish the smoke app
       working-directory: ${{ env.SMOKE_DIR }}
       run: dotnet publish -c Release "-p:LibsodiumStaticLibrary=$RUNNER_TEMP/libsodium-wasm/lib/libsodium.a"
+
+    # The version the archive is built and stamped with must be what the workload reports to a
+    # consuming app as EmscriptenVersion, the value the package's targets compare the stamp with.
+    - name: Check the build's Emscripten against the workload's EmscriptenVersion
+      working-directory: ${{ env.SMOKE_DIR }}
+      run: |
+        set -euo pipefail
+        consumer="$(dotnet msbuild -getProperty:EmscriptenVersion)"
+        built="$(cat "$RUNNER_TEMP/libsodium-wasm/emscripten-version")"
+        [ "$consumer" = "$built" ] || { echo "Built with Emscripten '$built' but the workload reports EmscriptenVersion '$consumer'."; exit 1; }
 
     - name: Run the smoke under the workload's Node
       working-directory: ${{ env.SMOKE_DIR }}

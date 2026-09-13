@@ -173,3 +173,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   `System.String` as the disposed object's name; it now names the owner's type.
 - `SensitiveMemory` wipes its bytes on disposal with `CryptographicOperations.ZeroMemory` instead
   of `Span.Clear`, so the wipe cannot be elided.
+- The browser-wasm `libsodium.a` is built with the wasm-tools workload's own Emscripten toolchain
+  and stamped from its `emscripten-version.txt`, the value the workload reports as
+  `$(EmscriptenVersion)`; the natives leg now fails if the stamp differs from what the workload
+  reports to the smoke app. The 0.0.13 archive was built with an upstream emsdk at the version
+  in the pack directory name (6.0.2), which the RC1 packs mislabel (they carry 6.0.3), so every
+  consumer saw `LUMOIN0001` although the objects linked and ran.

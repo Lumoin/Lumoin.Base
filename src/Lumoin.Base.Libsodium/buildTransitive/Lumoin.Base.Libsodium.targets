@@ -23,9 +23,11 @@
 
   <!-- The wasm SDK links NativeFileReference items into dotnet.wasm at publish
        (BrowserWasmApp.targets adds every NativeFileReference to _WasmNativeFileForLinking), which
-       needs the consuming app to have the wasm-tools workload installed at the Emscripten version
-       the archive was built against. The Exists() guard keeps a package packed without native
-       assets harmless to consumers, same as the xcframework above. -->
+       needs the consuming app to have the wasm-tools workload installed. The archive is built
+       with that workload's own Emscripten on the SDK band the package targets, and the check
+       below warns when the consumer's workload reports a different version. The Exists() guard
+       keeps a package packed without native assets harmless to consumers, same as the
+       xcframework above. -->
 
   <PropertyGroup>
     <_LumoinLibsodiumWasmArchive>$(MSBuildThisFileDirectory)../runtimes/browser-wasm/native/libsodium.a</_LumoinLibsodiumWasmArchive>
@@ -36,11 +38,12 @@
     <NativeFileReference Include="$(_LumoinLibsodiumWasmArchive)" />
   </ItemGroup>
 
-  <!-- The archive links cleanly only against the Emscripten it was built with. The natives job
-       stamps that version beside the archive; the wasm-tools workload publishes its own pin as
-       $(EmscriptenVersion) (the workload's Sdk.props reads emscripten-version.txt). A mismatch is
-       reported here as warning LUMOIN0001, naming both versions, instead of surfacing later as an
-       opaque link error. Suppress with NoWarn when the mismatch is known to link. -->
+  <!-- The archive is guaranteed to link only against the Emscripten it was built with (a nearby
+       version usually links too, but nothing promises it). The natives job stamps that version
+       beside the archive, read from the workload's emscripten-version.txt, the same file the
+       workload's Sdk.props publishes as $(EmscriptenVersion). A mismatch is reported here as
+       warning LUMOIN0001, naming both versions, instead of surfacing later as an opaque link
+       error. Suppress with NoWarn when the mismatch is known to link. -->
 
   <Target Name="LumoinLibsodiumCheckWasmEmscriptenVersion"
           BeforeTargets="Build"

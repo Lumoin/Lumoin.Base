@@ -54,10 +54,10 @@ env:
   LIBSODIUM_TARBALL_SHA256: adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349
 
   # Endpoints harden-runner is permitted to reach: NuGet feed access, dotnet tool
-  # downloads, .NET SDK installation, Sigstore attestation, certificate revocation,
-  # the standard api.github.com surface, and emsdk toolchain downloads for the
-  # browser-wasm archive. Add to this list when adding actions or external
-  # dependencies.
+  # downloads, .NET SDK and workload installation, Sigstore attestation, certificate
+  # revocation, and the standard api.github.com surface. The browser-wasm archive is
+  # built with the workload's own Emscripten, so it fetches nothing of its own. Add to
+  # this list when adding actions or external dependencies.
   COMMON_ALLOWED_ENDPOINTS: >
     aka.ms:443
     api.github.com:443
@@ -73,7 +73,6 @@ env:
     nuget.pkg.github.com:443
     fulcio.sigstore.dev:443
     rekor.sigstore.dev:443
-    storage.googleapis.com:443
     cacerts.digicert.com:80
     ts-crl.ws.symantec.com:80
     crl3.digicert.com:80
@@ -206,7 +205,7 @@ jobs:
   # binary by running the Lumoin.Base.Libsodium test suite against it with a hard "skipped: 0"
   # gate: the suite skips as inconclusive without a working library, so a binary that fails to
   # load cannot pass silently. The browser-wasm leg (kind: wasm) gets the same execution proof:
-  # it builds the static archive at the wasm-tools workload's pinned Emscripten and runs the
+  # it builds the static archive with the wasm-tools workload's own Emscripten and runs the
   # Lumoin.Base.Libsodium.WasmSmoke app against it under the workload's Node. Cross-compiled
   # legs (kind: android here, plus the natives-apple-mobile job below) cannot execute their
   # output on the build runner, so they ship on provenance instead: the pinned
@@ -231,8 +230,8 @@ jobs:
           # compiler -march value, not the Android ABI, hence android-prefix.
           - { os: ubuntu-latest, rid: android-arm64, kind: android, android-script: android-armv8-a.sh, android-prefix: libsodium-android-armv8-a+crypto }
           - { os: ubuntu-latest, rid: android-x64, kind: android, android-script: android-x86_64.sh, android-prefix: libsodium-android-westmere }
-          # The browser static archive: built at the exact Emscripten version the pinned SDK's
-          # wasm-tools workload uses, and proven by executing the Lumoin.Base.Libsodium.WasmSmoke
+          # The browser static archive: built with the Emscripten toolchain the pinned SDK's
+          # wasm-tools workload ships, and proven by executing the Lumoin.Base.Libsodium.WasmSmoke
           # app under Node — the same full execution gate the host legs get.
           - { os: ubuntu-latest, rid: browser-wasm, kind: wasm }
     steps:
@@ -276,16 +275,6 @@ jobs:
     - name: Install the wasm-tools workload
       if: ${{ matrix.kind == 'wasm' }}
       run: dotnet workload install wasm-tools --include-previews
-
-    - name: Discover the workload's Emscripten pin
-      if: ${{ matrix.kind == 'wasm' }}
-      id: emsdk
-      run: |
-        set -euo pipefail
-        pin="$(ls "$DOTNET_ROOT/packs" | grep -oP '^Microsoft\.NET\.Runtime\.Emscripten\.\K[0-9]+\.[0-9]+\.[0-9]+(?=\.Sdk\.)' | head -n 1)"
-        test -n "$pin"
-        echo "Workload Emscripten pin: $pin"
-        echo "version=$pin" >> "$GITHUB_OUTPUT"
 
     - name: Download and verify the pinned libsodium source (Unix)
       if: ${{ runner.os != 'Windows' }}
@@ -342,23 +331,44 @@ jobs:
         cp "./${{ matrix.android-prefix }}/lib/libsodium.so" "$RUNNER_TEMP/staging/${{ matrix.rid }}/native/libsodium.so"
       timeout-minutes: 15
 
+    # The archive is built with the wasm-tools workload's OWN Emscripten: the Sdk pack's emcc,
+    # pointed at the pack's LLVM, Binaryen and Node through the same DOTNET_EMSCRIPTEN_* variables
+    # the wasm SDK exports when it links a consumer's app, so the archive and the linker are the
+    # same toolchain by construction and no upstream emsdk is downloaded. The version stamp is
+    # read from the pack's emscripten-version.txt, the file the workload's Sdk.props reads into
+    # $(EmscriptenVersion), which the package's buildTransitive targets compare the stamp against
+    # (LUMOIN0001). It is NOT read from the pack directory name: the RC1 packs are named 6.0.2
+    # but carry and report Emscripten 6.0.3, and a stamp taken from the name fired the warning
+    # for every consumer.
     - name: Build libsodium (browser-wasm)
       if: ${{ matrix.kind == 'wasm' }}
       run: |
         set -euo pipefail
-        pin='${{ steps.emsdk.outputs.version }}'
-        git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
-        "$RUNNER_TEMP/emsdk/emsdk" install "$pin"
-        "$RUNNER_TEMP/emsdk/emsdk" activate "$pin"
-        source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+        sdk_tools="$(ls -d "$DOTNET_ROOT"/packs/Microsoft.NET.Runtime.Emscripten.*.Sdk.linux-x64/*/tools | head -n 1)"
+        node_bin="$(ls -d "$DOTNET_ROOT"/packs/Microsoft.NET.Runtime.Emscripten.*.Node.linux-x64/*/tools/bin | head -n 1)"
+        cache="$(ls -d "$DOTNET_ROOT"/packs/Microsoft.NET.Runtime.Emscripten.*.Cache.linux-x64/*/tools/emscripten/cache | head -n 1)"
+        version="$(tr -d '"[:space:]' < "$sdk_tools/emscripten/emscripten-version.txt")"
+        test -n "$version"
+        echo "Workload Emscripten version: $version"
+        export DOTNET_EMSCRIPTEN_LLVM_ROOT="$sdk_tools/bin"
+        export DOTNET_EMSCRIPTEN_BINARYEN_ROOT="$sdk_tools"
+        export DOTNET_EMSCRIPTEN_NODE_JS="$node_bin/node"
+        # The Cache pack is the workload's complete prebuilt system-library set and its config
+        # freezes it, so configure's link probes resolve against it read-only, as an app link
+        # does. Only libsodium's own objects enter the archive.
+        export EM_CACHE="$cache"
+        export EM_FROZEN_CACHE=1
+        export PATH="$sdk_tools/emscripten:$node_bin:$PATH"
+        banner="$(emcc --version | head -n 1)"
+        echo "$banner"
+        reported="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' <<< "$banner" | head -n 1 || true)"
+        [ "$reported" = "$version" ] || { echo "emcc reports '$reported' but emscripten-version.txt says $version."; exit 1; }
         cd "$RUNNER_TEMP/libsodium-src"
         emconfigure ./configure --disable-shared --without-pthreads --disable-ssp --disable-asm --disable-pie --prefix="$RUNNER_TEMP/libsodium-wasm"
         emmake make -j"$(nproc)" install
         mkdir -p "$RUNNER_TEMP/staging/browser-wasm/native"
         cp "$RUNNER_TEMP/libsodium-wasm/lib/libsodium.a" "$RUNNER_TEMP/staging/browser-wasm/native/libsodium.a"
-        # The archive links only against this Emscripten; the package's buildTransitive targets
-        # compare the stamp with the consumer's workload pin and warn on a mismatch (LUMOIN0001).
-        printf '%s\n' "$pin" > "$RUNNER_TEMP/staging/browser-wasm/native/libsodium.a.emscripten-version"
+        printf '%s\n' "$version" > "$RUNNER_TEMP/staging/browser-wasm/native/libsodium.a.emscripten-version"
       timeout-minutes: 20
 
     - name: Build libsodium (Windows, MSVC)
@@ -406,13 +416,18 @@ jobs:
 
     # The same full execution gate the host legs get, so the browser archive never ships
     # unproven: publish the smoke app against the freshly built static archive and run it under
-    # the wasm-tools workload's Node.
+    # the wasm-tools workload's Node. The stamp is gated too: it must equal what the workload
+    # reports to a consuming app as EmscriptenVersion, the value the package's buildTransitive
+    # targets compare it with, or every consumer gets LUMOIN0001 (0.0.13 shipped exactly that).
     - name: Prove the archive with the wasm smoke
       if: ${{ matrix.kind == 'wasm' }}
       working-directory: test/Lumoin.Base.Libsodium.WasmSmoke
       run: |
         set -euo pipefail
         dotnet publish -c Release "-p:LibsodiumStaticLibrary=$RUNNER_TEMP/staging/browser-wasm/native/libsodium.a"
+        consumer="$(dotnet msbuild -getProperty:EmscriptenVersion)"
+        stamp="$(cat "$RUNNER_TEMP/staging/browser-wasm/native/libsodium.a.emscripten-version")"
+        [ "$consumer" = "$stamp" ] || { echo "The archive is stamped Emscripten '$stamp' but the workload reports EmscriptenVersion '$consumer'; consumers would get LUMOIN0001."; exit 1; }
         node="$(ls -d "$DOTNET_ROOT"/packs/Microsoft.NET.Runtime.Emscripten.*.Node.linux-x64/*/tools/bin/node | head -n 1)"
         "$node" --version
         # .NET 11's wasm runtime uses the exnref exception-handling proposal; the workload's
