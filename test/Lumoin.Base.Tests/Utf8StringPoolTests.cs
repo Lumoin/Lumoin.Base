@@ -298,7 +298,9 @@ public sealed class Utf8StringPoolTests
         //chosen AllocationKind is threaded into the underlying BaseMemoryPool.Rent(size, kind) call.
         var slabRent = activities.FirstOrDefault(a => a.OperationName == "Rent");
         Assert.IsNotNull(slabRent, "Constructing the pool must rent its first arena slab.");
-        Assert.AreEqual(expectedTag, slabRent.GetTagItem("allocationKind")?.ToString(),
+        var allocationKindTag = slabRent.GetTagItem("allocationKind");
+        Assert.IsNotNull(allocationKindTag, "The lifecycle activity must carry the allocationKind tag.");
+        Assert.AreEqual(expectedTag, allocationKindTag.ToString(),
             $"The arena slab must be rented with allocationKind {expectedTag}.");
     }
 

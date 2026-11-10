@@ -43,7 +43,7 @@ public sealed class Utf8StringInternerCsCheckTests
     /// <see cref="PropertyTryInternRejectsALoneSurrogateWithoutInterningIt"/>.
     /// </summary>
     private static Gen<string> WellFormedText =>
-        Gen.OneOfConst(WellFormedFragments).Array[0, 24].Select(parts => string.Concat(parts));
+        Gen.OneOf(WellFormedFragments).Array[0, 24].Select(parts => string.Concat(parts));
 
 
     [TestMethod]

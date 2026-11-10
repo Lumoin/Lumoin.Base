@@ -124,12 +124,13 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Changed
 
-- **Every package targets `net11.0`** (.NET 11 RC1, go-live licence); consumers build with the
+- **Every package targets `net11.0`**; consumers build with the
   .NET 11 SDK. This library leads the family's move to .NET 11.
-- Toolchain refresh: .NET SDK 11.0.100-rc.1 (the wasm smoke builds on the same pin), MSTest
-  4.4.0, Microsoft.Testing.Extensions 2.4.0, code coverage 18.11.0, CsCheck 4.8.0, the
-  diagnostics local tools 10.0.731102, `dotnet-stryker` for mutation testing, and harden-runner
-  v2.21.1.
+- Toolchain refresh: .NET SDK 11.0.100 (the wasm smoke builds on the same pin), MSTest
+  4.5.2, Microsoft.Testing.Extensions 2.5.2, code coverage 18.12.0, CsCheck 5.0.1,
+  Microsoft.Sbom.Targets 4.1.13, the diagnostics local tools 10.0.750501, `dotnet-stryker` 5.0.0
+  for mutation testing, and harden-runner v2.22.4. Code-style rules are enforced in the build and
+  the MSTest analyzers run in `All` mode.
 - Package `Lumoin.Base.Sodium` is retired: its guarded-memory backing (`SodiumBacking`,
   namespace now `Lumoin.Base.Libsodium`) ships in `Lumoin.Base.Libsodium`. 0.0.7 remains the
   last release of the retired id.
