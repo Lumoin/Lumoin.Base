@@ -729,9 +729,13 @@ public sealed class ProtectedSlabTests
         var rentActivity = activities.FirstOrDefault(a => a.OperationName == "Rent");
         Assert.IsNotNull(rentActivity, "Should have captured the Rent lifecycle activity.");
 
-        Assert.AreEqual("ProtectedSlab", rentActivity.GetTagItem("nativeRentMode")?.ToString(),
+        var nativeRentModeTag = rentActivity.GetTagItem("nativeRentMode");
+        Assert.IsNotNull(nativeRentModeTag, "The lifecycle activity must carry the nativeRentMode tag.");
+        Assert.AreEqual("ProtectedSlab", nativeRentModeTag.ToString(),
             "A protected-slab Native rent must record its mode on the lifecycle activity.");
-        Assert.AreEqual("Native", rentActivity.GetTagItem("allocationKind")?.ToString(),
+        var allocationKindTag = rentActivity.GetTagItem("allocationKind");
+        Assert.IsNotNull(allocationKindTag, "The lifecycle activity must carry the allocationKind tag.");
+        Assert.AreEqual("Native", allocationKindTag.ToString(),
             "The effective kind must be recorded as Native.");
     }
 

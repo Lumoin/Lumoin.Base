@@ -109,7 +109,7 @@ jobs:
     steps:
     - name: Harden Runner
       if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' }}
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
+      uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a
       with:
         disable-sudo: true
         egress-policy: block
@@ -122,7 +122,7 @@ jobs:
         fetch-tags: true
 
     - name: Set up .NET SDK
-      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
       with:
         cache: true
         cache-dependency-path: '**/packages.lock.json'
@@ -195,7 +195,7 @@ jobs:
 
     - name: Create test summary
       if: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' }}
-      uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3
+      uses: EnricoMi/publish-unit-test-result-action@da5b7be67623cd59bbbd1a0ce4f022050a55605f
       with:
         trx_files: '${{ github.workspace }}/reports/**/*.trx'
 
@@ -237,7 +237,7 @@ jobs:
     steps:
     - name: Harden Runner
       if: ${{ runner.os == 'Linux' }}
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
+      uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a
       with:
         disable-sudo: true
         egress-policy: block
@@ -261,7 +261,7 @@ jobs:
     # .NET and skip the SDK setup entirely.
     - name: Set up .NET SDK
       if: ${{ matrix.kind == 'host' || matrix.kind == 'wasm' }}
-      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
       with:
         cache: true
         cache-dependency-path: '**/packages.lock.json'
@@ -271,10 +271,9 @@ jobs:
       if: ${{ matrix.kind == 'host' }}
       run: dotnet restore --locked-mode
 
-    # The workload manifests of a release-candidate SDK are prerelease packages themselves.
     - name: Install the wasm-tools workload
       if: ${{ matrix.kind == 'wasm' }}
-      run: dotnet workload install wasm-tools --include-previews
+      run: dotnet workload install wasm-tools
 
     - name: Download and verify the pinned libsodium source (Unix)
       if: ${{ runner.os != 'Windows' }}
@@ -337,7 +336,7 @@ jobs:
     # same toolchain by construction and no upstream emsdk is downloaded. The version stamp is
     # read from the pack's emscripten-version.txt, the file the workload's Sdk.props reads into
     # $(EmscriptenVersion), which the package's buildTransitive targets compare the stamp against
-    # (LUMOIN0001). It is NOT read from the pack directory name: the RC1 packs are named 6.0.2
+    # (LUMOIN0001). It is NOT read from the pack directory name: the .NET 11 packs are named 6.0.2
     # but carry and report Emscripten 6.0.3, and a stamp taken from the name fired the warning
     # for every consumer.
     - name: Build libsodium (browser-wasm)
@@ -457,7 +456,7 @@ jobs:
         sha256sum "$lib"
 
     - name: Upload staged native binary
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: native-${{ matrix.rid }}
         path: ${{ runner.temp }}/staging/
@@ -578,7 +577,7 @@ jobs:
         find "$xcf" -type f -exec shasum -a 256 {} \;
 
     - name: Upload the xcframework
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: xcframework-ios-maccatalyst
         path: ${{ runner.temp }}/xcframework-staging/
@@ -598,7 +597,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Harden Runner
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
+      uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a
       with:
         disable-sudo: true
         egress-policy: block
@@ -611,7 +610,7 @@ jobs:
         fetch-tags: true
 
     - name: Set up .NET SDK
-      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
       with:
         cache: true
         cache-dependency-path: '**/packages.lock.json'
@@ -671,7 +670,7 @@ jobs:
 
     - name: Upload library NuGet packages
       if: ${{ github.actor != 'dependabot[bot]' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: nupkg-libraries
         path: ./nupkgs/*.*
@@ -699,17 +698,16 @@ jobs:
         fetch-tags: true
 
     - name: Set up .NET SDK
-      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
       with:
         cache: true
         cache-dependency-path: '**/packages*.lock.json'
         global-json-file: global.json
 
     # Workload versions ride the SDK band resolved from global.json; the workload manifests and
-    # packs come from nuget.org like every other dependency. The manifests of a release-candidate
-    # SDK are prerelease packages themselves, hence --include-previews.
+    # packs come from nuget.org like every other dependency.
     - name: Install the ios and maccatalyst workloads
-      run: dotnet workload install ios maccatalyst --include-previews
+      run: dotnet workload install ios maccatalyst
       timeout-minutes: 15
 
     - name: Install dependencies
@@ -742,7 +740,7 @@ jobs:
       timeout-minutes: 15
 
     - name: Download native binaries
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         pattern: native-*
         merge-multiple: true
@@ -752,7 +750,7 @@ jobs:
     # directory: everything under native-staging is packed verbatim into runtimes/, where
     # Apple mobile platforms would never find it.
     - name: Download the ios/maccatalyst xcframework
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: xcframework-ios-maccatalyst
         path: ./apple-staging
@@ -790,7 +788,7 @@ jobs:
 
     - name: Upload the Lumoin.Base.Libsodium NuGet package
       if: ${{ github.actor != 'dependabot[bot]' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: nupkg-libsodium
         path: ./nupkgs/*.*
@@ -807,14 +805,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a
         with:
           disable-sudo: true
           egress-policy: block
           allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
 
       - name: Download NuGet packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: nupkg-*
           merge-multiple: true
@@ -840,14 +838,14 @@ jobs:
     environment: Release
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a
         with:
           disable-sudo: true
           egress-policy: block
           allowed-endpoints: ${{ env.COMMON_ALLOWED_ENDPOINTS }}
 
       - name: Download NuGet packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: nupkg-*
           merge-multiple: true

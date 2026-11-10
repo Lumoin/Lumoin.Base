@@ -270,7 +270,9 @@ public sealed class SodiumBackingTests
         var rentActivity = activities.FirstOrDefault(a => a.OperationName == "Rent");
         Assert.IsNotNull(rentActivity, "Should have captured the Rent lifecycle activity.");
 
-        Assert.AreEqual("Native", rentActivity.GetTagItem("allocationKind")?.ToString(),
+        var allocationKindTag = rentActivity.GetTagItem("allocationKind");
+        Assert.IsNotNull(allocationKindTag, "The lifecycle activity must carry the allocationKind tag.");
+        Assert.AreEqual("Native", allocationKindTag.ToString(),
             "Telemetry must record the effective kind as Native when a backing is wired.");
         Assert.IsNull(rentActivity.GetTagItem("requestedAllocationKind"),
             "A non-degraded Native rent must not carry a requestedAllocationKind tag.");

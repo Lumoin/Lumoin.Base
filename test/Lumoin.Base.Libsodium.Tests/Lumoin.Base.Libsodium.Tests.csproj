@@ -24,7 +24,7 @@
     <TestingPlatformShowTestsFailure>true</TestingPlatformShowTestsFailure>
     <RunSettingsFilePath>$(MSBuildProjectDirectory)\config.runsettings</RunSettingsFilePath>
     <IsTestApplication>true</IsTestApplication>
-    <MSTestAnalysisMode>Recommended</MSTestAnalysisMode>
+    <MSTestAnalysisMode>All</MSTestAnalysisMode>
 
     <!-- CA1515: types can be made internal. MSTest discovers public [TestClass] types by convention, and
          MSTest.Sdk suppresses this rule for test projects by default; this project uses the plain SDK with

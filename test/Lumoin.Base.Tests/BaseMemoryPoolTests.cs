@@ -693,9 +693,13 @@ public sealed class BaseMemoryPoolTests
         var rentActivity = activities.FirstOrDefault(a => a.OperationName == "Rent");
         Assert.IsNotNull(rentActivity, "Should have captured the Rent lifecycle activity.");
 
-        Assert.AreEqual("Pinned", rentActivity.GetTagItem("allocationKind")?.ToString(),
+        var allocationKindTag = rentActivity.GetTagItem("allocationKind");
+        Assert.IsNotNull(allocationKindTag, "The lifecycle activity must carry the allocationKind tag.");
+        Assert.AreEqual("Pinned", allocationKindTag.ToString(),
             "Telemetry must record the effective kind (Pinned), not the requested Native.");
-        Assert.AreEqual("Native", rentActivity.GetTagItem("requestedAllocationKind")?.ToString(),
+        var requestedAllocationKindTag = rentActivity.GetTagItem("requestedAllocationKind");
+        Assert.IsNotNull(requestedAllocationKindTag, "The lifecycle activity must carry the requestedAllocationKind tag.");
+        Assert.AreEqual("Native", requestedAllocationKindTag.ToString(),
             "Telemetry must preserve the originally requested kind (Native).");
 
         Assert.Contains(e => e.Name == "AllocationKindDegraded", rentActivity.Events, "A degraded Native rent must emit an AllocationKindDegraded event.");
@@ -996,9 +1000,11 @@ public sealed class BaseMemoryPoolTests
 
         //During the rental scope, Activity.Current is the lifecycle activity (child of parent).
         var owner = pool.Rent(64);
-        Assert.AreEqual("Rent", Activity.Current?.OperationName,
+        var lifecycleActivity = Activity.Current;
+        Assert.IsNotNull(lifecycleActivity, "A lifecycle activity should be ambient during the rental scope.");
+        Assert.AreEqual("Rent", lifecycleActivity.OperationName,
             "During rental scope, Activity.Current should be the lifecycle activity.");
-        Assert.AreEqual(parentActivity.SpanId, Activity.Current?.ParentSpanId,
+        Assert.AreEqual(parentActivity.SpanId, lifecycleActivity.ParentSpanId,
             "Lifecycle activity should be a child of the caller's activity.");
 
         //Dispose stops the lifecycle activity, which restores Activity.Current to its parent.

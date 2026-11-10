@@ -32,7 +32,7 @@ public sealed class BaseMemoryPoolCsCheckTests
     [TestMethod]
     public void PropertyRentAlwaysReturnsExactSizeForEveryKind()
     {
-        var kinds = Gen.OneOfConst(AllocationKind.Managed, AllocationKind.Pinned, AllocationKind.Native);
+        var kinds = Gen.OneOf(AllocationKind.Managed, AllocationKind.Pinned, AllocationKind.Native);
 
         Gen.Select(Gen.Int[1, 10000], kinds).Sample(t =>
         {
@@ -71,9 +71,9 @@ public sealed class BaseMemoryPoolCsCheckTests
 
 
     [TestMethod]
-    public void PropertyConcurrentOperationsAreThreadSafe()
+    public async Task PropertyConcurrentOperationsAreThreadSafe()
     {
-        Gen.Int[1, 20].Sample(threadCount =>
+        await Gen.Int[1, 20].SampleAsync(async threadCount =>
         {
             using var pool = new BaseMemoryPool();
             var tasks = new Task[threadCount];
@@ -106,11 +106,11 @@ public sealed class BaseMemoryPoolCsCheckTests
                 }, TestContext.CancellationToken);
             }
 
-            Task.WaitAll(tasks, TestContext.CancellationToken);
+            await Task.WhenAll(tasks).WaitAsync(TestContext.CancellationToken).ConfigureAwait(false);
 
             Assert.IsEmpty(exceptions,
                 $"No exceptions should occur during concurrent operations. Found: {string.Join(", ", exceptions)}.");
-        });
+        }).ConfigureAwait(false);
     }
 
 
